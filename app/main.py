@@ -3,7 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from app.core.config import get_settings
-from app.db.session import engine, Base
 from app.api.routes import auth, events, payments, tickets, gate
 
 settings = get_settings()
@@ -11,8 +10,7 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Create all tables on startup (use Alembic migrations in production)
-    Base.metadata.create_all(bind=engine)
+    # Schema is managed exclusively by Alembic migrations (see migrations/).
     yield
 
 
