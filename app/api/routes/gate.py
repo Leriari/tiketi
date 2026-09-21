@@ -8,7 +8,7 @@ The local server:
   2. Validates scans against its local DB (no internet needed)
   3. Marks tickets as USED immediately and broadcasts to all scanner apps
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
@@ -75,7 +75,7 @@ def scan_ticket(body: ScanRequest, db: Session = Depends(get_db)):
 
     # ── 5. Mark as USED ──────────────────────────────────────────────────────
     ticket.status = TicketStatus.USED
-    ticket.used_at = datetime.utcnow()
+    ticket.used_at = datetime.now(timezone.utc)
     db.commit()
 
     return ScanResult(
@@ -152,5 +152,5 @@ def sync_event_tickets(
             {"id": t.id, "totp_secret": t.totp_secret}
             for t in tickets
         ],
-        "synced_at": datetime.utcnow().isoformat(),
+        "synced_at": datetime.now(timezone.utc).isoformat(),
     }

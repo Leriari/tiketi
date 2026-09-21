@@ -5,7 +5,7 @@ Payment flow:
   GET  /payments/{id}/status  → Poll payment status
 """
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy.orm import Session
@@ -34,12 +34,12 @@ def _activate_ticket_for_payment(db: Session, payment: Payment, receipt_number: 
     """
     payment.status = PaymentStatus.SUCCESS
     payment.mpesa_receipt_number = receipt_number
-    payment.confirmed_at = datetime.utcnow()
+    payment.confirmed_at = datetime.now(timezone.utc)
 
     ticket = db.query(Ticket).filter(Ticket.id == payment.ticket_id).first()
     if ticket:
         ticket.status = TicketStatus.ACTIVE
-        ticket.purchased_at = datetime.utcnow()
+        ticket.purchased_at = datetime.now(timezone.utc)
 
         event = db.query(Event).filter(Event.id == ticket.event_id).first()
         if event:
