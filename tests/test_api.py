@@ -174,6 +174,7 @@ def test_full_mpesa_flow(auth_headers, test_event, monkeypatch):
     and manually firing the callback.
     """
     from app.services import mpesa as mpesa_svc
+    from app.worker import mint_ticket_nft
 
     # Mock STK push — return a fake Daraja response with a unique ID
     import uuid
@@ -187,6 +188,9 @@ def test_full_mpesa_flow(auth_headers, test_event, monkeypatch):
         }
 
     monkeypatch.setattr(mpesa_svc, "stk_push", mock_stk_push)
+    # Don't let this test enqueue a real Celery task onto the real Redis
+    # broker — it's a side effect on an external system the test shouldn't have.
+    monkeypatch.setattr(mint_ticket_nft, "delay", lambda *a, **kw: None)
 
     # 1. Initiate purchase
     res = client.post("/api/v1/payments/purchase", json={

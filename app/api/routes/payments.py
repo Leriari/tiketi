@@ -20,6 +20,7 @@ from app.services import mpesa as mpesa_service
 from app.services.totp_service import generate_totp_secret
 from app.core.dependencies import get_current_user
 from app.core.config import get_settings
+from app.worker import mint_ticket_nft
 
 router = APIRouter(prefix="/payments", tags=["Payments"])
 logger = logging.getLogger(__name__)
@@ -182,10 +183,12 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
             logger.warning(f"No payment found for CheckoutRequestID: {checkout_id}")
             return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
+        minted_ticket = None
+
         if parsed["success"]:
             # ── Payment confirmed ────────────────────────────────────────────
-            ticket = _activate_ticket_for_payment(db, payment, parsed["receipt_number"])
-            logger.info(f"Ticket {ticket.id if ticket else '?'} activated. Receipt: {parsed['receipt_number']}")
+            minted_ticket = _activate_ticket_for_payment(db, payment, parsed["receipt_number"])
+            logger.info(f"Ticket {minted_ticket.id if minted_ticket else '?'} activated. Receipt: {parsed['receipt_number']}")
 
         else:
             # ── Payment failed ───────────────────────────────────────────────
@@ -199,6 +202,9 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
             logger.info(f"Payment failed for ticket {payment.ticket_id}: {payment.failure_reason}")
 
         db.commit()
+
+        if minted_ticket:
+            mint_ticket_nft.delay(minted_ticket.id)
 
     except Exception as e:
         logger.error(f"Callback processing error: {e}", exc_info=True)
@@ -261,4 +267,8 @@ def dev_confirm_payment(
     db.commit()
     db.refresh(payment)
     logger.info(f"[DEV] Payment {payment.id} manually confirmed. Ticket {ticket.id if ticket else '?'} activated.")
+
+    if ticket:
+        mint_ticket_nft.delay(ticket.id)
+
     return payment

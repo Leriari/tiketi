@@ -41,6 +41,17 @@ class Settings(BaseSettings):
     # TOTP
     TOTP_ISSUER: str = "TiketiKE"
 
+    # Blockchain (Base Sepolia) — all optional. Left unset, minting stays a
+    # logged no-op stub rather than the app failing to start; this feature is
+    # additive, not load-bearing for the rest of the platform.
+    BLOCKCHAIN_RPC_URL: str = ""
+    NFT_CONTRACT_ADDRESS: str = ""
+    MINTER_PRIVATE_KEY: str = ""
+
+    @property
+    def BLOCKCHAIN_CONFIGURED(self) -> bool:
+        return bool(self.BLOCKCHAIN_RPC_URL and self.NFT_CONTRACT_ADDRESS and self.MINTER_PRIVATE_KEY)
+
 
 @lru_cache
 def get_settings() -> Settings:
