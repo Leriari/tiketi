@@ -27,7 +27,6 @@ celery_app.conf.update(
     enable_utc=True,
     task_routes={
         "app.worker.mint_ticket_nft": {"queue": "blockchain"},
-        "app.worker.send_ticket_confirmation_sms": {"queue": "notifications"},
     },
 )
 
@@ -60,37 +59,3 @@ def mint_ticket_nft(self, ticket_id: str, event_id: str, owner_wallet: str):
     )
     # Phase 2: replace stub with web3.py minting logic
     return {"status": "stub", "ticket_id": ticket_id}
-
-
-# ── Notification Task ─────────────────────────────────────────────────────────
-
-@celery_app.task(name="app.worker.send_ticket_confirmation_sms")
-def send_ticket_confirmation_sms(phone_number: str, ticket_id: str, event_title: str):
-    """
-    Send SMS confirmation after ticket activation.
-    Uses Africa's Talking API.
-    """
-    import logging
-    logger = logging.getLogger(__name__)
-
-    message = (
-        f"Your TiketiKE ticket for {event_title} is confirmed! "
-        f"Ticket ID: {ticket_id[:8].upper()}. "
-        f"Open the app to view your QR code."
-    )
-
-    if settings.APP_ENV == "development":
-        logger.info(f"[DEV SMS] To {phone_number}: {message}")
-        return
-
-    try:
-        import africastalking
-        africastalking.initialize(settings.AFRICASTALKING_USERNAME, settings.AFRICASTALKING_API_KEY)
-        africastalking.SMS.send(
-            message=message,
-            recipients=[f"+{phone_number}"],
-            sender_id="TIKETI",
-        )
-    except Exception as exc:
-        logger.error(f"SMS failed for {phone_number}: {exc}")
-        raise
