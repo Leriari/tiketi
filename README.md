@@ -4,6 +4,27 @@
 
 Built for the Kenyan market. Solves ticket counterfeiting, scalping, and unreliable venue internet — without forcing users to touch crypto.
 
+### What's real vs. what's a mock right now
+
+The **backend** (`app/`) is a real FastAPI service: phone-based auth, event
+creation/listing, M-Pesa STK push purchase, TOTP-based dynamic QR tickets,
+and gate scanning are all implemented and covered by a real, passing test
+suite. There is **no smart contract anywhere in this repository** — NFT
+minting is an explicit stub, and 8 of the schema's 14 tables (organizer
+accounts, gate-scanner devices, resale/transfers, price-cap history,
+attendance log, audit log, notifications) have no routes at all yet.
+
+The **frontend** (`frontend/`) is five fully built UI surfaces (Attendee,
+Seller/resale, Organiser Console, Scanner, Platform Admin), but it runs
+against an **in-browser mock API by default** (`VITE_USE_MOCK`, defaults
+`true`). Only the original Attendee purchase→ticket→gate-scan journey has
+a real backend-connected implementation (`frontend/src/live/liveApi.js`);
+the other ~85% of that file is unimplemented stubs, so the Seller,
+Organiser, Scanner, and Admin surfaces only work against the mock today.
+
+See `STATUS.md` at the repo root for a full, evidence-tagged audit of
+exactly what's implemented, stubbed, or missing.
+
 ---
 
 ## How It Works
@@ -32,14 +53,14 @@ tiketi/
 │   │   ├── events.py        # Create/list events
 │   │   ├── payments.py      # M-Pesa STK push + callback
 │   │   ├── tickets.py       # View tickets, get TOTP seed, get QR image
-│   │   └── gate.py          # Bouncer scan endpoint + pre-event sync
+│   │   └── gate.py          # Bouncer scan endpoint + pre-event sync (auth required)
 │   ├── core/
 │   │   ├── config.py        # Pydantic settings (reads .env)
 │   │   └── dependencies.py  # FastAPI auth dependency
 │   ├── db/
 │   │   └── session.py       # SQLAlchemy engine + session
 │   ├── models/
-│   │   └── models.py        # User, Event, Ticket, Payment ORM models
+│   │   └── models.py        # 14-table schema — only 6 tables have routes today
 │   ├── schemas/
 │   │   └── schemas.py       # Pydantic request/response schemas
 │   ├── services/
@@ -47,13 +68,19 @@ tiketi/
 │   │   ├── totp_service.py  # TOTP secret gen, OTP verify, QR image gen
 │   │   └── auth_service.py  # OTP store, JWT issue, user creation
 │   ├── main.py              # FastAPI app + router registration
-│   └── worker.py            # Celery tasks (NFT minting stub for Phase 2)
-├── migrations/              # Alembic migrations
+│   └── worker.py            # Celery: mint_ticket_nft (stub — no contract exists)
+├── migrations/              # Alembic migrations — the only schema authority
 │   └── versions/
-│       └── *_initial_schema.py
 ├── tests/
 │   ├── test_api.py          # Full end-to-end flow: auth→purchase→callback→scan
 │   └── test_totp.py         # TOTP unit tests
+├── frontend/                 # React 19 + Vite SPA — 5 UI surfaces, mock API by default
+│   └── src/
+│       ├── pages/            # attendee/, seller/, organiser/, scanner/, admin/
+│       ├── shells/            # per-surface nav/layout shells
+│       ├── components/ui/    # shared component library
+│       ├── mock/mockApi.js   # the in-browser backend every surface runs against
+│       └── live/liveApi.js   # real-backend client — mostly unimplemented stubs
 ├── Dockerfile
 ├── docker-compose.yml
 ├── requirements.txt
@@ -147,7 +174,10 @@ POST /api/v1/gate/scan
 → { "valid": true, "event_title": "...", "owner_phone": "****5678" }
 
 # Pre-event sync (local server downloads all ticket secrets before the event)
+# Requires a JWT belonging to an organizer-member of this event or an
+# account linked to a GateScanner device registered for it — otherwise 403.
 GET /api/v1/gate/sync-event/{event_id}
+Authorization: Bearer <token>
 → { "tickets": [{"id": "...", "totp_secret": "..."}], ... }
 ```
 
@@ -188,7 +218,8 @@ The test suite covers the full flow end-to-end using an in-memory SQLite DB and 
 
 | Phase | Status | Description |
 |-------|--------|-------------|
-| **1** | ✅ **Done** | FastAPI backend, M-Pesa STK push, TOTP QR codes, gate scanner |
+| **1** | 🟡 **Partial** | Core flow works (auth, events, M-Pesa purchase, TOTP QR, gate scan) — but only 6 of the schema's 14 tables have routes; organizer accounts, gate-scanner registration, resale/transfers, and audit/notification tables are still unwired |
+| **1.5** | ✅ Done | Frontend: 5 full UI surfaces built (`frontend/`), currently mock-API only — see "What's real vs. what's a mock" above |
 | **2** | 🔜 Next | Solidity ERC-721 NFT contract, web3.py minting, anti-scalping rules |
 | **3** | 🔜 Planned | Flutter ticket viewer app, Android scanner app |
 | **4** | 🔜 Planned | Local Wi-Fi mesh server, offline dry-run testing, pilot event |
@@ -209,9 +240,10 @@ The codebase is wired for Phase 2 — you just need to fill in the blanks:
 
 - **TOTP secrets** are stored in the database. In production, encrypt them at rest using a KMS (e.g. AWS KMS, Google Cloud KMS)
 - **OTP store** is currently in-memory. In production, move to Redis with TTL
-- **Gate sync endpoint** (`/gate/sync-event/`) should be IP-restricted to the local server only in production
+- **Gate sync endpoint** (`/gate/sync-event/`) now requires a JWT and checks the caller is an organizer-member of the event or a registered gate-scanner device for it (403 otherwise). No route yet creates those `OrganizerMember`/`GateScanner` rows, so in practice this only grants access via a directly-inserted `GateScanner` row today — registration endpoints for those are still Phase 2 work
 - The **M-Pesa callback** endpoint has no auth by design (Daraja requirement) — validate `checkout_request_id` to prevent spoofing
-- Rotate `SECRET_KEY` and never commit it — use environment variables or a secrets manager
+- `SECRET_KEY` and `MPESA_CALLBACK_URL` are required env vars with no default — the app refuses to start if either is unset, rather than silently running with an insecure placeholder. Rotate `SECRET_KEY` and never commit it — use environment variables or a secrets manager
+- SMS delivery (Africa's Talking) has been removed entirely — OTPs are logged to console only. Add a real SMS provider before this goes anywhere near production users
 
 ---
 
@@ -220,12 +252,13 @@ The codebase is wired for Phase 2 — you just need to fill in the blanks:
 | Layer | Technology |
 |-------|-----------|
 | API | FastAPI + Uvicorn |
+| Frontend | React 19 + Vite, react-router-dom, Tailwind — mock API by default |
 | Database | PostgreSQL (SQLite for dev) |
 | ORM | SQLAlchemy 2.0 + Alembic |
 | Payments | Safaricom Daraja (M-Pesa) |
 | Dynamic QR | PyOTP (TOTP) + qrcode |
 | Auth | Phone OTP + JWT (python-jose) |
-| SMS | Africa's Talking |
+| SMS | Not implemented — OTP is logged to console only |
 | Task Queue | Celery + Redis |
 | Containers | Docker + Docker Compose |
 | Phase 2 | Solidity + web3.py (Polygon/Base) |
