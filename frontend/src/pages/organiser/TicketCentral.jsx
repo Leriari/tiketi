@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { Download, CheckSquare, RotateCcw } from "lucide-react";
+import { Download, CheckSquare, RotateCcw, AlertTriangle } from "lucide-react";
 import { api } from "../../api";
 import { useApiData } from "../../lib/useApiData";
 import { useToast } from "../../components/ui/Toast";
 import { FilterBar, SearchField, Select, Table, Badge, Card, ErrorState } from "../../components/ui";
+import { CONTRACT_DEPLOYED } from "../../constants";
 
 const STATUS_TONE = { active: "success", used: "neutral", cancelled: "danger", resale: "warning", pending_payment: "warning" };
 
@@ -48,6 +49,13 @@ export default function TicketCentral() {
   return (
     <div className="mx-auto max-w-6xl px-4 lg:px-6 py-6 flex flex-col gap-4">
       <h1 className="text-h1 text-ink-primary">Ticket Central</h1>
+
+      {!CONTRACT_DEPLOYED && (
+        <div className="rounded-md bg-warning-bg text-warning-on-tint px-4 py-2.5 text-body-sm flex items-start gap-2">
+          <AlertTriangle size={16} className="flex-none mt-0.5" />
+          <span><strong className="font-semibold">Simulated data.</strong> No smart contract is deployed. Token IDs and transaction hashes shown below are illustrative and do not reflect on-chain state.</span>
+        </div>
+      )}
 
       <FilterBar active={active} onClear={() => { setEventId(""); setStatus(""); setQuery(""); }}>
         <SearchField value={query} onChange={setQuery} placeholder="Ticket ID or event" className="w-56" />

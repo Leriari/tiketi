@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
+import { AlertTriangle } from "lucide-react";
 import { api } from "../../api";
 import { useApiData } from "../../lib/useApiData";
 import { Select, Card, StatCard, ChainBadge, ProgressBar, CopyButton, EmptyState, ErrorState, Skeleton } from "../../components/ui";
+import { CONTRACT_DEPLOYED } from "../../constants";
 
 export default function ContractStatus() {
   const { data: events, error: eventsError, retry: retryEvents } = useApiData(() => api.getOrganiserEvents());
@@ -34,6 +36,13 @@ export default function ContractStatus() {
           {events.map((e) => <option key={e.id} value={e.id}>{e.title}</option>)}
         </Select>
       </div>
+
+      {!CONTRACT_DEPLOYED && (
+        <div className="rounded-md bg-warning-bg text-warning-on-tint px-4 py-2.5 text-body-sm flex items-start gap-2">
+          <AlertTriangle size={16} className="flex-none mt-0.5" />
+          <span><strong className="font-semibold">Simulated data.</strong> No smart contract is deployed. The values on this page are illustrative and do not reflect on-chain state.</span>
+        </div>
+      )}
 
       {error ? (
         <ErrorState description={error} onRetry={retry} />

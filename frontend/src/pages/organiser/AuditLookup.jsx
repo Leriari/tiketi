@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Search, AlertTriangle } from "lucide-react";
 import { api } from "../../api";
 import { SearchField, Card, Badge, EmptyState, Skeleton } from "../../components/ui";
+import { CONTRACT_DEPLOYED } from "../../constants";
 
 const STATUS_TONE = { active: "success", used: "neutral", cancelled: "danger", resale: "warning", pending_payment: "warning" };
 
@@ -22,6 +23,13 @@ export default function AuditLookup() {
     <div className="mx-auto max-w-3xl px-4 lg:px-6 py-6 flex flex-col gap-4">
       <h1 className="text-h1 text-ink-primary">Ticket Audit Lookup</h1>
       <p className="text-body-sm text-ink-tertiary">Search by ticket ID, holder phone, or M-Pesa receipt number.</p>
+
+      {!CONTRACT_DEPLOYED && (
+        <div className="rounded-md bg-warning-bg text-warning-on-tint px-4 py-2.5 text-body-sm flex items-start gap-2">
+          <AlertTriangle size={16} className="flex-none mt-0.5" />
+          <span><strong className="font-semibold">Simulated data.</strong> No smart contract is deployed. Any transaction hash shown below is illustrative and does not reflect on-chain state.</span>
+        </div>
+      )}
 
       <form onSubmit={search} className="flex gap-2">
         <SearchField value={query} onChange={setQuery} placeholder="e.g. a1b2c3d4, 0712345678, OEI2AK4MFU" className="flex-1" />

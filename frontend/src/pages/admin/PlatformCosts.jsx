@@ -1,6 +1,8 @@
+import { AlertTriangle } from "lucide-react";
 import { api } from "../../api";
 import { useApiData } from "../../lib/useApiData";
 import { StatCard, MoneyText, Table, EmptyState, ErrorState, Skeleton } from "../../components/ui";
+import { CONTRACT_DEPLOYED } from "../../constants";
 
 export default function PlatformCosts() {
   const { data, error, retry } = useApiData(() => api.getPlatformCosts());
@@ -11,6 +13,13 @@ export default function PlatformCosts() {
         <h1 className="text-h1 text-ink-primary">Platform Costs</h1>
         <p className="text-body-sm text-ink-tertiary">What it costs ChainTix to run — infrastructure, on-chain gas, SMS, and Daraja transaction charges.</p>
       </div>
+
+      {!CONTRACT_DEPLOYED && (
+        <div className="rounded-md bg-warning-bg text-warning-on-tint px-4 py-2.5 text-body-sm flex items-start gap-2">
+          <AlertTriangle size={16} className="flex-none mt-0.5" />
+          <span><strong className="font-semibold">Simulated data.</strong> No smart contract is deployed. The gas figures on this page are illustrative and do not reflect real on-chain spend.</span>
+        </div>
+      )}
 
       {error ? (
         <ErrorState description={error} onRetry={retry} />

@@ -1,6 +1,8 @@
+import { AlertTriangle } from "lucide-react";
 import { api } from "../../api";
 import { useApiData } from "../../lib/useApiData";
 import { Table, MoneyText, Badge, EmptyState, ErrorState } from "../../components/ui";
+import { CONTRACT_DEPLOYED } from "../../constants";
 
 export default function RoyaltyLedger() {
   const { data: rows, error, retry } = useApiData(() => api.getRoyaltyLedger());
@@ -17,7 +19,14 @@ export default function RoyaltyLedger() {
           </p>
         )}
       </div>
-      <p className="text-body-sm text-ink-tertiary">Every resale of your tickets pays you a royalty automatically, enforced on-chain — this is the full record.</p>
+      <p className="text-body-sm text-ink-tertiary">Every resale of your tickets pays you a royalty automatically — this is the full record.</p>
+
+      {!CONTRACT_DEPLOYED && (
+        <div className="rounded-md bg-warning-bg text-warning-on-tint px-4 py-2.5 text-body-sm flex items-start gap-2">
+          <AlertTriangle size={16} className="flex-none mt-0.5" />
+          <span><strong className="font-semibold">Simulated data.</strong> No smart contract is deployed. The values on this page are illustrative and do not reflect on-chain state.</span>
+        </div>
+      )}
 
       {error && <ErrorState description={error} onRetry={retry} />}
 
