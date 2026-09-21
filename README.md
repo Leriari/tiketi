@@ -220,19 +220,39 @@ The test suite covers the full flow end-to-end using an in-memory SQLite DB and 
 |-------|--------|-------------|
 | **1** | 🟡 **Partial** | Core flow works (auth, events, M-Pesa purchase, TOTP QR, gate scan) — but only 6 of the schema's 14 tables have routes; organizer accounts, gate-scanner registration, resale/transfers, and audit/notification tables are still unwired |
 | **1.5** | ✅ Done | Frontend: 5 full UI surfaces built (`frontend/`), currently mock-API only — see "What's real vs. what's a mock" above |
-| **2** | 🔜 Next | Solidity ERC-721 NFT contract, web3.py minting, anti-scalping rules |
+| **2** | 🟡 **Partial** | `contracts/TiketiNFT.sol` (ERC-721 + ERC-2981) is written, tested (29 passing), and verified end-to-end against a local chain. Backend minting (`app/services/web3_service.py`) is wired in. **Not yet deployed to Base Sepolia** — needs a funded wallet + RPC, see `contracts/README` below |
 | **3** | 🔜 Planned | Flutter ticket viewer app, Android scanner app |
 | **4** | 🔜 Planned | Local Wi-Fi mesh server, offline dry-run testing, pilot event |
 
-### Phase 2 Hooks Already in Place
+### Blockchain (contracts/)
 
-The codebase is wired for Phase 2 — you just need to fill in the blanks:
+`contracts/` is a self-contained Hardhat project — see `contracts/contracts/TiketiNFT.sol`
+for the contract and `contracts/test/TiketiNFT.test.js` for its test suite
+(`cd contracts && npm test`). `contracts/scripts/deploy.js` deploys it and
+prints the `NFT_CONTRACT_ADDRESS` line to add to this repo's `.env`.
 
-- `app/worker.py` → `mint_ticket_nft()` task: replace the stub with `web3.py` contract call
-- `app/models/models.py` → `Ticket.nft_token_id`, `Ticket.nft_tx_hash`: columns already exist
-- `app/models/models.py` → `User.wallet_address`: column already exists
-- `app/models/models.py` → `Event.contract_address`: column already exists
-- `.env.example` → blockchain RPC + private key vars already documented
+Once a contract is deployed, set these three in `.env` (all empty/unset by
+default — the backend runs fine without them, minting just stays a logged
+no-op):
+
+```
+BLOCKCHAIN_RPC_URL=      # e.g. a Base Sepolia RPC endpoint
+NFT_CONTRACT_ADDRESS=    # from the deploy script's output
+MINTER_PRIVATE_KEY=      # the backend's own relayer wallet — never the deployer's
+```
+
+Then start the Celery worker **with the blockchain queue included** — this
+is easy to get wrong and silently mint nothing:
+
+```bash
+celery -A app.worker worker --loglevel=info -Q celery,blockchain
+```
+
+Tickets mint to that relayer wallet (custodial), not the buyer's own
+address — see the docstring in `app/services/web3_service.py` for why.
+Real self-custody happens only if a user calls the contract's
+`claimTicket` (the frontend's "Claim to wallet" flow) — that side isn't
+wired into the backend yet, only minting is.
 
 ---
 
