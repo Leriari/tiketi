@@ -7,7 +7,7 @@ class Settings(BaseSettings):
 
     # App
     APP_ENV: str = "development"
-    SECRET_KEY: str = "changeme"
+    SECRET_KEY: str  # required — no insecure default; set in .env
     DEBUG: bool = True
     API_V1_PREFIX: str = "/api/v1"
 
@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     MPESA_CONSUMER_SECRET: str = ""
     MPESA_SHORTCODE: str = "174379"
     MPESA_PASSKEY: str = ""
-    MPESA_CALLBACK_URL: str = "https://example.com/api/v1/payments/mpesa/callback"
+    MPESA_CALLBACK_URL: str  # required — a placeholder default means callbacks silently never arrive
     MPESA_ENV: str = "sandbox"
 
     @property
