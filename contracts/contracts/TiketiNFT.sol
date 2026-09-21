@@ -1,0 +1,189 @@
+// SPDX-License-Identifier: MIT
+pragma solidity 0.8.24;
+
+import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/token/common/ERC2981.sol";
+import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
+
+/// @title TiketiNFT — ChainTix event ticket, ERC-721 + ERC-2981 royalties
+/// @notice Each token is one ticket. Anti-scalping is enforced on-chain:
+///         a resale listing above its face-value cap simply cannot be created.
+contract TiketiNFT is ERC721, ERC2981, Ownable, ReentrancyGuard {
+    struct TicketMeta {
+        uint256 eventId;
+        uint256 tierId;
+        uint256 facePriceKes;
+        uint16 resaleCapBps; // basis points of facePriceKes, e.g. 11000 = 110% (a 10% uplift ceiling)
+        bool used;
+        bool claimed;
+    }
+
+    /// @dev Token ID 0 is never minted — it's the backend's "no NFT yet" sentinel
+    /// (Ticket.nft_token_id is a nullable integer column and needs a value that
+    /// can never collide with a real token).
+    uint256 private _nextTokenId = 1;
+
+    /// @notice The backend relayer wallet allowed to mint and mark tickets used.
+    /// Royalties on every mint are also routed to this address — it is the
+    /// platform's custodial wallet, which forwards an organiser's share off-chain,
+    /// matching this project's Web 2.5 custodial-wallet design everywhere else.
+    address public minter;
+
+    mapping(uint256 => TicketMeta) public ticketMeta;
+
+    /// @notice KES-denominated resale ask for a listed token. 0 = not listed.
+    /// This is the figure the on-chain cap check runs against; the actual
+    /// settlement in buyResale is in the chain's native currency (msg.value),
+    /// since KES itself is not an on-chain asset.
+    mapping(uint256 => uint256) public listingPriceKes;
+
+    event TicketMinted(
+        uint256 indexed tokenId,
+        address indexed to,
+        uint256 indexed eventId,
+        uint256 tierId,
+        uint256 facePriceKes,
+        uint16 resaleCapBps,
+        uint96 royaltyBps
+    );
+    event ListedForResale(uint256 indexed tokenId, address indexed seller, uint256 priceKes);
+    event ResaleCompleted(
+        uint256 indexed tokenId,
+        address indexed seller,
+        address indexed buyer,
+        uint256 salePriceWei,
+        uint256 royaltyPaidWei
+    );
+    event TicketUsed(uint256 indexed tokenId, address indexed holder);
+    event TicketClaimed(uint256 indexed tokenId, address indexed from, address indexed to);
+
+    modifier onlyMinter() {
+        require(msg.sender == minter, "TiketiNFT: caller is not the minter");
+        _;
+    }
+
+    constructor(address _minter) ERC721("ChainTix", "CTIX") {
+        require(_minter != address(0), "TiketiNFT: minter cannot be zero address");
+        minter = _minter;
+    }
+
+    /// @notice Mint a new ticket. Minter-only.
+    function mintTicket(
+        address to,
+        uint256 eventId,
+        uint256 tierId,
+        uint256 facePriceKes,
+        uint16 resaleCapBps,
+        uint96 royaltyBps
+    ) external onlyMinter returns (uint256) {
+        require(to != address(0), "TiketiNFT: cannot mint to zero address");
+
+        uint256 tokenId = _nextTokenId++;
+        _safeMint(to, tokenId);
+
+        ticketMeta[tokenId] = TicketMeta({
+            eventId: eventId,
+            tierId: tierId,
+            facePriceKes: facePriceKes,
+            resaleCapBps: resaleCapBps,
+            used: false,
+            claimed: false
+        });
+
+        // Royalty receiver is the minter (the platform relayer) — see the
+        // `minter` doc comment above for why there's no separate receiver param.
+        _setTokenRoyalty(tokenId, minter, royaltyBps);
+
+        emit TicketMinted(tokenId, to, eventId, tierId, facePriceKes, resaleCapBps, royaltyBps);
+        return tokenId;
+    }
+
+    /// @notice List an owned, unused ticket for resale. Reverts above the cap —
+    /// this revert IS the anti-scalping enforcement.
+    function listForResale(uint256 tokenId, uint256 priceKes) external {
+        require(_exists(tokenId), "TiketiNFT: token does not exist");
+        require(ownerOf(tokenId) == msg.sender, "TiketiNFT: caller is not token owner");
+        require(!ticketMeta[tokenId].used, "TiketiNFT: ticket already used");
+        require(priceKes > 0, "TiketiNFT: price must be positive");
+
+        TicketMeta storage meta = ticketMeta[tokenId];
+        uint256 cap = (meta.facePriceKes * meta.resaleCapBps) / 10000;
+        require(priceKes <= cap, "TiketiNFT: price exceeds resale cap");
+
+        listingPriceKes[tokenId] = priceKes;
+        emit ListedForResale(tokenId, msg.sender, priceKes);
+    }
+
+    /// @notice Buy a listed ticket. The sale price is msg.value (native
+    /// currency); proceeds are split between the seller and the ERC-2981
+    /// royalty receiver. Reverts (undoing the transfer too) if either leg
+    /// of the payment fails, so the token is never left transferred without
+    /// the seller having actually been paid.
+    function buyResale(uint256 tokenId) external payable nonReentrant {
+        require(_exists(tokenId), "TiketiNFT: token does not exist");
+        uint256 priceKes = listingPriceKes[tokenId];
+        require(priceKes > 0, "TiketiNFT: not listed for resale");
+        require(msg.value > 0, "TiketiNFT: payment required");
+
+        address seller = ownerOf(tokenId);
+        require(seller != msg.sender, "TiketiNFT: cannot buy your own listing");
+
+        (address royaltyReceiver, uint256 royaltyAmount) = royaltyInfo(tokenId, msg.value);
+        uint256 sellerProceeds = msg.value - royaltyAmount;
+
+        // Effects before interactions: clear the listing and move ownership
+        // first, so a reentrant call sees this token as already sold.
+        listingPriceKes[tokenId] = 0;
+        _transfer(seller, msg.sender, tokenId);
+
+        (bool sellerPaid, ) = payable(seller).call{value: sellerProceeds}("");
+        require(sellerPaid, "TiketiNFT: seller payment failed");
+
+        if (royaltyAmount > 0 && royaltyReceiver != address(0)) {
+            (bool royaltyPaid, ) = payable(royaltyReceiver).call{value: royaltyAmount}("");
+            require(royaltyPaid, "TiketiNFT: royalty payment failed");
+        }
+
+        emit ResaleCompleted(tokenId, seller, msg.sender, msg.value, royaltyAmount);
+    }
+
+    /// @notice Mark a ticket used at the gate. Minter-only, one-time.
+    function markUsed(uint256 tokenId) external onlyMinter {
+        require(_exists(tokenId), "TiketiNFT: token does not exist");
+        require(!ticketMeta[tokenId].used, "TiketiNFT: ticket already used");
+
+        ticketMeta[tokenId].used = true;
+        emit TicketUsed(tokenId, ownerOf(tokenId));
+    }
+
+    /// @notice Move a custodially-held ticket to the holder's own wallet.
+    /// One-time per token — once claimed, the new owner uses standard
+    /// ERC-721 transfers for anything further.
+    function claimTicket(uint256 tokenId, address to) external {
+        require(_exists(tokenId), "TiketiNFT: token does not exist");
+        require(ownerOf(tokenId) == msg.sender, "TiketiNFT: caller is not token owner");
+        require(to != address(0), "TiketiNFT: cannot claim to zero address");
+        require(!ticketMeta[tokenId].claimed, "TiketiNFT: already claimed");
+
+        ticketMeta[tokenId].claimed = true;
+        _transfer(msg.sender, to, tokenId);
+
+        emit TicketClaimed(tokenId, msg.sender, to);
+    }
+
+    /// @notice Change the minter address. Owner-only.
+    function setMinter(address newMinter) external onlyOwner {
+        require(newMinter != address(0), "TiketiNFT: minter cannot be zero address");
+        minter = newMinter;
+    }
+
+    function supportsInterface(bytes4 interfaceId)
+        public
+        view
+        override(ERC721, ERC2981)
+        returns (bool)
+    {
+        return super.supportsInterface(interfaceId);
+    }
+}
