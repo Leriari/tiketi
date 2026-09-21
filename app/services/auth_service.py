@@ -1,12 +1,13 @@
 """
 Phone-based authentication.
 Flow:
-  1. User submits phone number → backend generates OTP, sends via SMS
+  1. User submits phone number → backend generates OTP
   2. User submits OTP → backend validates, issues JWT
   3. JWT is used for all subsequent API calls
 
-In development, OTP is returned in the response (no SMS needed).
-In production, OTP is sent via Africa's Talking SMS API.
+OTP delivery is logged to console only — real SMS sending is out of
+scope for this project. The OTP is also returned directly in the
+request-otp response in development mode.
 """
 import secrets
 import logging
@@ -55,26 +56,10 @@ def verify_otp(phone_number: str, otp_code: str) -> bool:
 
 async def send_otp_sms(phone_number: str, otp: str):
     """
-    Send OTP via Africa's Talking SMS.
-    In sandbox mode, this logs to console instead.
+    SMS delivery is out of scope for this project. Logs the OTP to console
+    so it reaches the developer during testing.
     """
-    if settings.APP_ENV == "development" or settings.AFRICASTALKING_USERNAME == "sandbox":
-        logger.info(f"[DEV] OTP for {phone_number}: {otp}")
-        return
-
-    try:
-        import africastalking
-        africastalking.initialize(settings.AFRICASTALKING_USERNAME, settings.AFRICASTALKING_API_KEY)
-        sms = africastalking.SMS
-        sms.send(
-            message=f"Your TiketiKE verification code is: {otp}. Valid for 5 minutes.",
-            recipients=[f"+{phone_number}"],
-            sender_id="TIKETI",
-        )
-        logger.info(f"OTP SMS sent to {phone_number}")
-    except Exception as e:
-        logger.error(f"SMS send failed for {phone_number}: {e}")
-        raise
+    logger.info(f"[DEV] OTP for {phone_number}: {otp}")
 
 
 def get_or_create_user(db: Session, phone_number: str) -> User:

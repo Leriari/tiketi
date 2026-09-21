@@ -37,8 +37,6 @@ class Settings(BaseSettings):
 
     # OTP
     OTP_EXPIRE_SECONDS: int = 300
-    AFRICASTALKING_API_KEY: str = ""
-    AFRICASTALKING_USERNAME: str = "sandbox"
 
     # TOTP
     TOTP_ISSUER: str = "TiketiKE"
