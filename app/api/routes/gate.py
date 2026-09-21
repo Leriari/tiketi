@@ -14,8 +14,9 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models.models import Ticket, TicketStatus
+from app.models.models import Ticket, TicketStatus, Event, GateScanner, OrganizerMember, AuditLog, User
 from app.services.totp_service import validate_scanned_payload
+from app.core.dependencies import get_current_user
 
 router = APIRouter(prefix="/gate", tags=["Gate Validation"])
 
@@ -91,15 +92,45 @@ def scan_ticket(body: ScanRequest, db: Session = Depends(get_db)):
 
 
 @router.get("/sync-event/{event_id}")
-def sync_event_tickets(event_id: str, db: Session = Depends(get_db)):
+def sync_event_tickets(
+    event_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
     """
     Pre-event sync endpoint.
     The local mesh server calls this once before the event starts
     to download all active ticket IDs + TOTP secrets for offline validation.
 
-    In production: this endpoint requires a special sync key and
-    is only callable from the local server's IP.
+    Restricted to: a member of the event's organizer, or an account linked
+    to a registered GateScanner device for this event.
     """
+    event = db.query(Event).filter(Event.id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    is_organizer_member = (
+        event.organizer_id is not None
+        and db.query(OrganizerMember)
+        .filter(
+            OrganizerMember.organizer_id == event.organizer_id,
+            OrganizerMember.account_id == current_user.id,
+        )
+        .first()
+        is not None
+    )
+    is_registered_scanner = (
+        db.query(GateScanner)
+        .filter(
+            GateScanner.event_id == event_id,
+            GateScanner.account_id == current_user.id,
+        )
+        .first()
+        is not None
+    )
+    if not (is_organizer_member or is_registered_scanner):
+        raise HTTPException(status_code=403, detail="Not authorised to sync this event")
+
     tickets = (
         db.query(Ticket)
         .filter(
@@ -108,6 +139,14 @@ def sync_event_tickets(event_id: str, db: Session = Depends(get_db)):
         )
         .all()
     )
+
+    db.add(AuditLog(
+        actor_id=current_user.id,
+        action_type="gate_sync",
+        target_id=event_id,
+        target_type="event",
+    ))
+    db.commit()
 
     # Return minimal data — only what the gate needs
     return {
