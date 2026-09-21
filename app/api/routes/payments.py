@@ -19,9 +19,35 @@ from app.schemas.schemas import PurchaseRequest, PurchaseResponse, PaymentStatus
 from app.services import mpesa as mpesa_service
 from app.services.totp_service import generate_totp_secret
 from app.core.dependencies import get_current_user
+from app.core.config import get_settings
 
 router = APIRouter(prefix="/payments", tags=["Payments"])
 logger = logging.getLogger(__name__)
+settings = get_settings()
+
+
+def _activate_ticket_for_payment(db: Session, payment: Payment, receipt_number: str) -> Ticket | None:
+    """
+    Shared success path for a confirmed payment — used by both the real Daraja
+    callback and the dev-only /dev-confirm endpoint below, so there is exactly
+    one place that decides what "payment succeeded" means for a ticket.
+    """
+    payment.status = PaymentStatus.SUCCESS
+    payment.mpesa_receipt_number = receipt_number
+    payment.confirmed_at = datetime.utcnow()
+
+    ticket = db.query(Ticket).filter(Ticket.id == payment.ticket_id).first()
+    if ticket:
+        ticket.status = TicketStatus.ACTIVE
+        ticket.purchased_at = datetime.utcnow()
+
+        event = db.query(Event).filter(Event.id == ticket.event_id).first()
+        if event:
+            event.tickets_sold += 1
+        if ticket.tier:
+            ticket.tier.tickets_sold += 1
+
+    return ticket
 
 
 @router.post("/purchase", response_model=PurchaseResponse, status_code=status.HTTP_201_CREATED)
@@ -158,24 +184,8 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
 
         if parsed["success"]:
             # ── Payment confirmed ────────────────────────────────────────────
-            payment.status = PaymentStatus.SUCCESS
-            payment.mpesa_receipt_number = parsed["receipt_number"]
-            payment.confirmed_at = datetime.utcnow()
-
-            # Activate the ticket
-            ticket = db.query(Ticket).filter(Ticket.id == payment.ticket_id).first()
-            if ticket:
-                ticket.status = TicketStatus.ACTIVE
-                ticket.purchased_at = datetime.utcnow()
-
-                # Increment event and tier counters
-                event = db.query(Event).filter(Event.id == ticket.event_id).first()
-                if event:
-                    event.tickets_sold += 1
-                if ticket.tier:
-                    ticket.tier.tickets_sold += 1
-
-            logger.info(f"Ticket {ticket.id} activated. Receipt: {parsed['receipt_number']}")
+            ticket = _activate_ticket_for_payment(db, payment, parsed["receipt_number"])
+            logger.info(f"Ticket {ticket.id if ticket else '?'} activated. Receipt: {parsed['receipt_number']}")
 
         else:
             # ── Payment failed ───────────────────────────────────────────────
@@ -211,4 +221,44 @@ def get_payment_status(
     )
     if not payment:
         raise HTTPException(status_code=404, detail="Payment not found")
+    return payment
+
+
+@router.post(
+    "/{payment_id}/dev-confirm",
+    response_model=PaymentStatusOut,
+    include_in_schema=settings.APP_ENV == "development",
+    summary="DEV ONLY — manually confirm a payment without a real M-Pesa callback",
+)
+def dev_confirm_payment(
+    payment_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Safaricom's sandbox can't reach `localhost` without a live ngrok tunnel, so
+    without this, a purchase hangs forever waiting for a callback that never
+    arrives. This runs the exact same activation logic as the real Daraja
+    callback (`_activate_ticket_for_payment`) — a manual trigger for that same
+    code path, not a separate one. Hidden from the OpenAPI docs and hard-blocked
+    outside development regardless of that, since include_in_schema only hides
+    a route, it doesn't disable it.
+    """
+    if settings.APP_ENV != "development":
+        raise HTTPException(status_code=404, detail="Not found")
+
+    payment = (
+        db.query(Payment)
+        .filter(Payment.id == payment_id, Payment.user_id == current_user.id)
+        .first()
+    )
+    if not payment:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    if payment.status != PaymentStatus.INITIATED:
+        raise HTTPException(status_code=400, detail=f"Payment already {payment.status.value}")
+
+    ticket = _activate_ticket_for_payment(db, payment, receipt_number=f"DEV{payment.id[:8].upper()}")
+    db.commit()
+    db.refresh(payment)
+    logger.info(f"[DEV] Payment {payment.id} manually confirmed. Ticket {ticket.id if ticket else '?'} activated.")
     return payment

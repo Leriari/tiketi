@@ -56,3 +56,23 @@ def verify_otp(body: OTPVerifyRequest, db: Session = Depends(get_db)):
 @router.get("/me", response_model=UserOut, summary="Get current user profile")
 def get_me(current_user: User = Depends(get_current_user)):
     return current_user
+
+
+@router.post("/login", response_model=TokenResponse, summary="Log in with just a phone number (MVP — no OTP)")
+def login(body: PhoneOTPRequest, db: Session = Depends(get_db)):
+    """
+    Simplified MVP login: no SMS/OTP verification round-trip.
+    Creates the account on first login, same as /verify-otp does.
+
+    /request-otp + /verify-otp stay available and untouched for whenever
+    real SMS delivery is wired up — this is a deliberately simpler
+    replacement for now, not a removal of that flow.
+    """
+    user = auth_service.get_or_create_user(db, body.phone_number)
+    token = auth_service.create_access_token(user.id, user.phone_number)
+
+    return TokenResponse(
+        access_token=token,
+        user_id=user.id,
+        phone_number=user.phone_number,
+    )
