@@ -35,3 +35,7 @@ htmlcov/
 # OS
 .DS_Store
 Thumbs.db
+
+# Personal documents (not part of the project)
+*.docx
+*.pdf
