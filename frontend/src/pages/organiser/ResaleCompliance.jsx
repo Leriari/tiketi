@@ -9,7 +9,7 @@ export default function ResaleCompliance() {
   return (
     <div className="mx-auto max-w-4xl px-4 lg:px-6 py-6 flex flex-col gap-4">
       <h1 className="text-h1 text-ink-primary">Resale Compliance</h1>
-      <p className="text-body-sm text-ink-tertiary">How well your resale price caps are being enforced across all listings, on-chain and by ChainTix's own checks before a listing goes live.</p>
+      <p className="text-body-sm text-ink-tertiary">How well your resale price caps are being enforced across all listings, by ChainTix's own checks before a listing goes live.</p>
 
       {error && <ErrorState description={error} onRetry={retry} />}
 

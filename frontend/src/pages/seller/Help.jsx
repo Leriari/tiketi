@@ -13,7 +13,7 @@ const FAQS = [
   },
   {
     q: "Can I sell a ticket above face value?",
-    a: "Only up to the cap the organiser set for that event — usually shown as a percentage of face value on the listing screen. The cap is enforced by smart contract, so the app won't let you enter a higher price.",
+    a: "Only up to the cap the organiser set for that event — usually shown as a percentage of face value on the listing screen. The cap is enforced by ChainTix, so the app won't let you enter a higher price.",
   },
   {
     q: "What happens if my ticket doesn't sell?",
@@ -21,7 +21,7 @@ const FAQS = [
   },
   {
     q: "Is a resold ticket guaranteed authentic?",
-    a: "Yes — every ticket is a verified on-chain credential, and ownership transfers atomically when a sale completes, so a resold ticket is exactly as authentic as the original.",
+    a: "Yes — every ticket is a verified digital credential, and ownership transfers atomically when a sale completes, so a resold ticket is exactly as authentic as the original.",
   },
 ];
 
