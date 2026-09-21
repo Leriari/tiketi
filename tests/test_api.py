@@ -273,3 +273,58 @@ def test_full_mpesa_flow(auth_headers, test_event, monkeypatch):
     scan2 = res.json()
     assert scan2["valid"] is False
     assert "Already used" in scan2["reason"]
+
+
+# ── Gate Sync Auth Tests ───────────────────────────────────────────────────────
+
+def test_sync_event_requires_auth(test_event):
+    res = client.get(f"/api/v1/gate/sync-event/{test_event['id']}")
+    assert res.status_code == 403
+
+
+def test_sync_event_forbidden_for_unrelated_user(test_event):
+    """An authenticated user with no organizer-member or gate-scanner link to
+    this event must not be able to pull ticket secrets for it."""
+    phone = "0733000099"
+    res = client.post("/api/v1/auth/request-otp", json={"phone_number": phone})
+    otp = res.json()["dev_otp"]
+    res = client.post("/api/v1/auth/verify-otp", json={"phone_number": phone, "otp_code": otp})
+    token = res.json()["access_token"]
+
+    res = client.get(
+        f"/api/v1/gate/sync-event/{test_event['id']}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res.status_code == 403
+
+
+def test_sync_event_allowed_for_registered_scanner(test_event):
+    """A user linked to a GateScanner device registered for this event can sync."""
+    from app.models.models import GateScanner
+
+    phone = "0733000098"
+    res = client.post("/api/v1/auth/request-otp", json={"phone_number": phone})
+    otp = res.json()["dev_otp"]
+    res = client.post("/api/v1/auth/verify-otp", json={"phone_number": phone, "otp_code": otp})
+    token = res.json()["access_token"]
+    res = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
+    user_id = res.json()["id"]
+
+    db = TestingSessionLocal()
+    db.add(GateScanner(
+        event_id=test_event["id"],
+        account_id=user_id,
+        gate_name="Main Gate",
+        device_id="test-device-001",
+    ))
+    db.commit()
+    db.close()
+
+    res = client.get(
+        f"/api/v1/gate/sync-event/{test_event['id']}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res.status_code == 200
+    data = res.json()
+    assert data["event_id"] == test_event["id"]
+    assert isinstance(data["tickets"], list)
