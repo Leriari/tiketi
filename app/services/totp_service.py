@@ -16,7 +16,7 @@ import base64
 import pyotp
 import qrcode
 import io
-from datetime import datetime
+from datetime import datetime, timezone
 
 
 TOTP_INTERVAL = 30  # seconds per window
@@ -84,7 +84,7 @@ def generate_qr_image_bytes(ticket_id: str, secret: str) -> bytes:
 
 def seconds_until_next_rotation() -> int:
     """How many seconds until the current TOTP window expires."""
-    return TOTP_INTERVAL - (int(datetime.utcnow().timestamp()) % TOTP_INTERVAL)
+    return TOTP_INTERVAL - (int(datetime.now(timezone.utc).timestamp()) % TOTP_INTERVAL)
 
 
 # ─── Gate Validation (used by local mesh server) ──────────────────────────────

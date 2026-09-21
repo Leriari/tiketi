@@ -1,5 +1,5 @@
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from sqlalchemy import (
     String, Integer, Float, Boolean, DateTime,
     ForeignKey, Enum as SAEnum, Text
@@ -108,7 +108,7 @@ class User(Base):
     display_name: Mapped[str | None] = mapped_column(String(100))
     email: Mapped[str | None] = mapped_column(String(255), unique=True)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     # Custodial wallet address — assigned when NFT minting is enabled (Phase 3 of the roadmap)
     wallet_address: Mapped[str | None] = mapped_column(String(42))
@@ -133,7 +133,7 @@ class Organizer(Base):
     )
     mpesa_paybill: Mapped[str | None] = mapped_column(String(20))
     royalty_wallet_address: Mapped[str | None] = mapped_column(String(42))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class OrganizerMember(Base):
@@ -144,7 +144,7 @@ class OrganizerMember(Base):
     organizer_id: Mapped[str] = mapped_column(ForeignKey("organizers.id"), nullable=False)
     account_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
     role: Mapped[OrganizerRole] = mapped_column(SAEnum(OrganizerRole), default=OrganizerRole.STAFF)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class Event(Base):
@@ -170,7 +170,7 @@ class Event(Base):
     contract_address: Mapped[str | None] = mapped_column(String(42))
 
     status: Mapped[EventStatus] = mapped_column(SAEnum(EventStatus), default=EventStatus.PUBLISHED)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     tickets: Mapped[list["Ticket"]] = relationship("Ticket", back_populates="event")
     tiers: Mapped[list["EventTier"]] = relationship(
@@ -220,7 +220,7 @@ class EventTier(Base):
     organizer_royalty_percent: Mapped[float] = mapped_column(Float, default=10.0)
 
     status: Mapped[TierStatus] = mapped_column(SAEnum(TierStatus), default=TierStatus.ACTIVE)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     event: Mapped["Event"] = relationship("Event", back_populates="tiers")
     tickets: Mapped[list["Ticket"]] = relationship("Ticket", back_populates="tier")
@@ -256,7 +256,7 @@ class Ticket(Base):
     # Timestamps
     purchased_at: Mapped[datetime | None] = mapped_column(DateTime)
     used_at: Mapped[datetime | None] = mapped_column(DateTime)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     event: Mapped["Event"] = relationship("Event", back_populates="tickets")
     tier: Mapped["EventTier | None"] = relationship("EventTier", back_populates="tickets")
@@ -298,7 +298,7 @@ class Payment(Base):
     mpesa_receipt_number: Mapped[str | None] = mapped_column(String(50))  # e.g. OEI2AK4MFU
     phone_number: Mapped[str] = mapped_column(String(15), nullable=False)
 
-    initiated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    initiated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime)
     failure_reason: Mapped[str | None] = mapped_column(String(255))
 
@@ -326,7 +326,7 @@ class Barcode(Base):
     status: Mapped[BarcodeStatus] = mapped_column(SAEnum(BarcodeStatus), default=BarcodeStatus.ACTIVE)
     # Unused until Phase 4 (client-side rotation/offline validation) needs an expiry window
     expires_at: Mapped[datetime | None] = mapped_column(DateTime)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
     ticket: Mapped["Ticket"] = relationship("Ticket", back_populates="barcodes")
 
@@ -344,8 +344,8 @@ class PriceCap(Base):
     change_type: Mapped[PriceCapChangeType] = mapped_column(
         SAEnum(PriceCapChangeType), default=PriceCapChangeType.INITIAL
     )
-    effective_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    effective_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class Transfer(Base):
@@ -361,8 +361,8 @@ class Transfer(Base):
     transfer_type: Mapped[TransferType] = mapped_column(SAEnum(TransferType), default=TransferType.RESALE)
     transfer_price_kes: Mapped[float | None] = mapped_column(Float)
     organizer_royalty_kes: Mapped[float | None] = mapped_column(Float)
-    transferred_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    transferred_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class GateScanner(Base):
@@ -380,7 +380,7 @@ class GateScanner(Base):
     status: Mapped[GateScannerStatus] = mapped_column(
         SAEnum(GateScannerStatus), default=GateScannerStatus.ACTIVE
     )
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class Attendance(Base):
@@ -394,7 +394,7 @@ class Attendance(Base):
     event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), nullable=False)
     scanner_id: Mapped[str | None] = mapped_column(ForeignKey("gate_scanners.id"))
 
-    scan_time: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    scan_time: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     status: Mapped[AttendanceStatus] = mapped_column(SAEnum(AttendanceStatus), nullable=False)
 
 
@@ -407,7 +407,7 @@ class AuditLog(Base):
     action_type: Mapped[str] = mapped_column(String(50), nullable=False)
     target_id: Mapped[str | None] = mapped_column(String(36))
     target_type: Mapped[str | None] = mapped_column(String(50))
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
 class Notification(Base):
@@ -422,4 +422,4 @@ class Notification(Base):
         SAEnum(NotificationStatus), default=NotificationStatus.PENDING
     )
     sent_at: Mapped[datetime | None] = mapped_column(DateTime)
-    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
