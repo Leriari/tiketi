@@ -6,7 +6,7 @@ from typing import List
 from app.db.session import get_db
 from app.models.models import Ticket, TicketStatus, User
 from app.schemas.schemas import TicketOut, TicketSeedResponse
-from app.services.totp_service import generate_qr_image_bytes, seconds_until_next_rotation
+from app.services.totp_service import generate_qr_image_bytes, seconds_until_next_rotation, build_qr_payload
 from app.core.dependencies import get_current_user
 from app.core.config import get_settings
 
@@ -64,6 +64,7 @@ def get_ticket_seed(
         event_title=event.title,
         event_date=event.event_date.strftime("%d %b %Y, %H:%M"),
         venue=event.venue,
+        qr_payload=build_qr_payload(ticket.id, ticket.totp_secret),
     )
 
 

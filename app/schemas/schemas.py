@@ -181,3 +181,8 @@ class TicketSeedResponse(BaseModel):
     event_title: str
     event_date: str
     venue: str
+    # Current rotating payload as text — same string the QR image encodes.
+    # Lets the MVP's manual-entry gate scanner work without a camera/QR
+    # decoder; the image endpoint (qr.png) remains the primary source once
+    # camera scanning is added.
+    qr_payload: str
