@@ -1,16 +1,60 @@
-# React + Vite
+# ChainTix frontend
 
-This template provides a minimal setup to get React working in Vite with HMR and some Oxlint rules.
+React 19 + Vite SPA implementing five product surfaces from `spec.md`
+(repo root): **Attendee**, **Seller/P2P resale**, **Organiser Console**,
+**Scanner**, and **Platform Admin**.
 
-Currently, two official plugins are available:
+## Mock vs. live backend
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+`src/api.js` dispatches every API call to one of two implementations,
+controlled by `VITE_USE_MOCK` in `.env` (defaults to `true`):
 
-## React Compiler
+- `src/mock/mockApi.js` — a `localStorage`-backed in-browser backend that
+  every surface actually runs against today. This is how the app is
+  normally run and demoed.
+- `src/live/liveApi.js` — calls the real FastAPI backend (`../app/`). Only
+  the original Attendee purchase→ticket→gate-scan journey (~13 of ~85
+  functions) is actually implemented here; everything else throws a 501
+  `ApiError`. Setting `VITE_USE_MOCK=false` today will break the Seller,
+  Organiser, Scanner, and Admin surfaces.
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+See `STATUS.md` at the repo root for the full audit of what's real vs. stubbed.
 
-## Expanding the Oxlint configuration
+## Structure
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and Oxlint's TypeScript related rules in your project.
+```
+src/
+├── pages/{attendee,seller,organiser,scanner,admin}/   # the 5 surfaces
+├── shells/            # per-surface nav/layout shells
+├── components/ui/     # shared component library (Button, Card, Table, ...)
+├── mock/               # in-browser mock backend + seed data
+├── live/liveApi.js     # real-backend client
+├── context/             # AuthContext
+├── theme/               # ThemeProvider (per-surface light/dark default)
+├── lib/                 # small hooks/utilities (cn, useApiData, ...)
+└── styles/tokens.css    # design-token source of truth (colors, type scale)
+```
+
+## Running it
+
+```bash
+npm install
+npm run dev       # http://localhost:5173, mock API by default
+npm run build      # production build to dist/
+```
+
+To point at a real running backend instead, set in `.env`:
+
+```
+VITE_USE_MOCK=false
+VITE_API_BASE_URL=http://localhost:8000
+```
+
+(Only the Attendee flow will actually work — see above.)
+
+## Notes
+
+- Not a PWA despite two surfaces being named "...PWA" in the spec — there's
+  no manifest or service worker. The Scanner surface's "offline" behaviour
+  is a client-side `localStorage` simulation, not real offline capability.
+- No test suite exists for this frontend yet.
