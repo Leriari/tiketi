@@ -5,7 +5,11 @@ mint_ticket_nft runs asynchronously after M-Pesa confirmation, so the HTTP
 callback returns instantly without waiting for a blockchain transaction.
 
 Start worker:
-    celery -A app.worker worker --loglevel=info
+    celery -A app.worker worker --loglevel=info -Q celery,blockchain
+
+The -Q flag matters: mint_ticket_nft is routed to the "blockchain" queue
+(see task_routes below), and a worker started without -Q blockchain will
+never consume it — the task just sits in Redis, silently unprocessed.
 """
 import logging
 from celery import Celery
