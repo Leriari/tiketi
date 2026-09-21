@@ -15,7 +15,6 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.models.models import Ticket, TicketStatus, Event, GateScanner, OrganizerMember, AuditLog, User
-from app.services.totp_service import validate_scanned_payload
 from app.core.dependencies import get_current_user
 
 router = APIRouter(prefix="/gate", tags=["Gate Validation"])
@@ -41,10 +40,7 @@ def scan_ticket(body: ScanRequest, db: Session = Depends(get_db)):
     Validate a scanned QR code.
     Returns a clear VALID / INVALID result for the bouncer app to display.
     """
-    # ── 1. Parse and validate QR payload ────────────────────────────────────
-    is_valid, result = validate_scanned_payload(body.qr_payload, secret="")
-
-    # Extract ticket_id from payload to look up the secret
+    # ── 1. Parse QR payload ──────────────────────────────────────────────────
     parts = body.qr_payload.split(":")
     if len(parts) != 3 or parts[0] != "TIKETI":
         return ScanResult(valid=False, reason="Invalid QR format")
