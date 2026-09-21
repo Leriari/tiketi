@@ -1,0 +1,173 @@
+/**
+ * Design tokens — spec.md §1.1. Two complete, self-contained value sets:
+ * :root is dark (the default for Attendee, Seller and Scanner), and
+ * [data-theme="light"] overrides every token for Organiser Console and
+ * Platform Admin's light default, or for any surface the user toggles.
+ *
+ * Components must never hard-code a color — always the corresponding
+ * Tailwind utility (bg-surface, text-ink-primary, border-line, ...), which
+ * resolves through these custom properties and repaints instantly when
+ * data-theme changes on <html>. See src/theme/ThemeProvider.jsx for how
+ * data-theme gets set (explicit user choice > current surface's default).
+ */
+
+:root {
+  /* Dark theme (default) */
+  --bg-base: #0a0a0f;
+  --bg-surface: #131318;
+  --bg-elevated: #1c1c24;
+  --bg-inset: #08080c;
+
+  --border-subtle: #24242e;
+  --border-default: #32323e;
+  --border-strong: #4a4a58;
+
+  --text-primary: #f5f5f7;
+  --text-secondary: #a1a1ae;
+  /* Spec.md §1.1 gives #6b6b78 here, but that's only 3.5:1 against
+     --bg-surface — fails §8.6's 4.5:1 body-text bar on every sidebar nav
+     group label, hint and caption in the app. Darkened just enough to clear
+     4.5:1 against every dark-theme surface; same fix mirrored below for light. */
+  --text-tertiary: #858591;
+  --text-disabled: #45454f;
+
+  --brand-primary: #7c5cff;
+  /* Text-on-own-tint variant (active nav, badge pills) — brand-primary itself
+     is only ~3.6:1 against its own 10-15% tint, short of §8.6's 4.5:1. */
+  --brand-primary-on-tint: #9a82ff;
+  /* Solid-fill variant (selected chip, pagination, timeline step) — white
+     text on raw brand-primary is only 4.35:1, short of 4.5:1. Identical in
+     both themes, like brand-primary itself, since it's judged against a
+     fixed white foreground either way. */
+  --brand-primary-solid: #6f47e8;
+  --brand-accent: #c3f53c;
+  --brand-accent-ink: #14171a;
+
+  --success: #2fb344;
+  --success-bg: rgba(47, 179, 68, 0.12);
+  --warning: #e8a317;
+  --warning-bg: rgba(232, 163, 23, 0.12);
+  --danger: #e5484d;
+  --danger-bg: rgba(229, 72, 77, 0.12);
+  --info: #3e8bff;
+  --info-bg: rgba(62, 139, 255, 0.12);
+
+  /* Text-on-own-tint variants (Badge and friends: colored text on that same
+     color's *-bg). success/warning/info already clear 4.5:1 against their
+     own dark-theme tint, so these just equal the base color; danger doesn't
+     (~4.2:1), so it gets a lighter shade here. */
+  --success-on-tint: var(--success);
+  --warning-on-tint: var(--warning);
+  --danger-on-tint: #ef7579;
+  --info-on-tint: var(--info);
+
+  --chain-verified: #00d4aa;
+  --chain-pending: #e8a317;
+
+  --shadow-card: 0 0 0 1px var(--border-subtle);
+  --shadow-modal: 0 0 0 1px var(--border-default);
+
+  color-scheme: dark;
+}
+
+[data-theme="light"] {
+  --bg-base: #ffffff;
+  --bg-surface: #ffffff;
+  --bg-elevated: #ffffff;
+  --bg-inset: #f7f8f7;
+
+  --border-subtle: #ecefec;
+  --border-default: #dce0dc;
+  --border-strong: #b7bdb7;
+
+  --text-primary: #14171a;
+  --text-secondary: #5a6169;
+  /* Same §8.6 contrast fix as the dark theme above — spec's #8a929b is only
+     ~3:1 against white/--bg-inset. */
+  --text-tertiary: #646b75;
+  --text-disabled: #c2c7cc;
+
+  /* Brand is identical in both themes */
+  --brand-primary: #7c5cff;
+  --brand-primary-on-tint: #5f3fd9;
+  --brand-primary-solid: #6f47e8;
+  --brand-accent: #c3f53c;
+  --brand-accent-ink: #14171a;
+
+  /* success/warning were already darkened from spec's literal dark-theme hex
+     for light-theme legibility, but not far enough — as plain MoneyText/icon
+     text on white they were still only 2.74:1 / 3.63:1. Darkened further to
+     clear 4.5:1; this also covers their own-tint badge pairing, so no
+     separate on-tint value is needed for these two. */
+  --success: #1c7a2c;
+  --success-bg: rgba(47, 179, 68, 0.1);
+  --warning: #8a5c14;
+  --warning-bg: rgba(184, 121, 28, 0.1);
+  --danger: #d63b40;
+  --danger-bg: rgba(214, 59, 64, 0.08);
+  --info: #2f6fe0;
+  --info-bg: rgba(47, 111, 224, 0.08);
+
+  /* Text-on-own-tint variants — see the dark-theme block above. danger/info
+     still fail 4.5:1 against their own light-theme tint even after the base
+     darkening above, so they keep a distinct, further-darkened value;
+     success/warning's darkened base already clears their tint too. */
+  --success-on-tint: var(--success);
+  --warning-on-tint: var(--warning);
+  --danger-on-tint: #bc2c31;
+  --info-on-tint: #1d54b8;
+
+  /* Same as success/warning above — #00a884 as plain/on-tint text was only
+     3.03:1 against white. chain-pending already equals the (now-fixed)
+     warning color, so it tracks that fix automatically via var(). */
+  --chain-verified: #006e54;
+  --chain-pending: var(--warning);
+
+  /* Light theme uses real shadow, not border contrast */
+  --shadow-card: 0 1px 2px rgba(20, 23, 26, 0.05);
+  --shadow-modal: 0 8px 24px rgba(20, 23, 26, 0.12);
+
+  color-scheme: light;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-base);
+  color: var(--text-primary);
+  font-family: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  transition: background-color 150ms ease-out, color 150ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 80ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+::selection {
+  background: var(--brand-primary);
+  color: #fff;
+}
+
+/* Focus ring — spec §8.6: visible 2px brand ring, 2px offset, everywhere */
+:focus-visible {
+  outline: 2px solid var(--brand-primary);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
