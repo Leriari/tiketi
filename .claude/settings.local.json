@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm create *)",
+      "Bash(npm install *)",
+      "Bash(npm run *)",
+      "Bash(chromium-cli --help)",
+      "Bash(npx --yes playwright --version)",
+      "Bash(python -c \"import playwright\")",
+      "Bash(./venv/Scripts/python.exe -c \"import playwright\")",
+      "Bash(npx --yes playwright install chromium --with-deps)",
+      "Bash(curl -sf http://127.0.0.1:8000/)",
+      "Bash(break)",
+      "Bash(curl -sf http://127.0.0.1:5173/)",
+      "Bash(curl -s http://127.0.0.1:8000/)",
+      "Bash(curl -s -o /dev/null -w \"frontend status: %{http_code}\\\\n\" http://127.0.0.1:5173/)",
+      "Bash(npm init *)",
+      "Bash(node drive.mjs)"
+    ]
+  }
+}
