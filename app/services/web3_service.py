@@ -84,15 +84,21 @@ def _revert_message(exc: ContractLogicError) -> str:
     Extract just the contract's own require() string from web3.py's
     exception, whatever wrapper text the connected node puts around it.
 
-    Confirmed empirically (not assumed) that this varies by node: a local
-    Hardhat node wraps it as "execution reverted: Error: VM Exception while
-    processing transaction: reverted with reason string 'X'", not the
-    simpler "execution reverted: X" this originally assumed — a real,
-    node-specific formatting difference, not a hypothetical one. Handles
-    both: regex out the quoted reason if that wrapper is present, else fall
-    back to stripping a plain "execution reverted: " prefix.
+    Confirmed empirically (not assumed) that node wrapper text varies: a
+    local Hardhat node wraps it as "execution reverted: Error: VM Exception
+    while processing transaction: reverted with reason string 'X'", Base
+    Sepolia's real RPC returns the plainer "execution reverted: X" this
+    originally (wrongly) assumed was universal. Handles both: regex out the
+    quoted reason if that wrapper is present, else fall back to stripping a
+    plain "execution reverted: " prefix.
+
+    Reads exc.args[0], not str(exc): when a ContractLogicError carries a
+    `data` argument too, str(exc) renders the whole (message, data) tuple
+    as text — confirmed by an actual 400 response once showing that raw
+    tuple repr to a caller instead of the clean message. args[0] is always
+    just the message, regardless of how many other args the exception has.
     """
-    msg = str(exc)
+    msg = exc.args[0] if exc.args else str(exc)
     match = _REVERT_REASON_QUOTED.search(msg)
     if match:
         return match.group(1)
