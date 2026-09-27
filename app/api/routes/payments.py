@@ -13,14 +13,14 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models.models import (
     Event, EventTier, EventStatus, Ticket, Payment, Barcode,
-    TicketStatus, PaymentStatus, BarcodeStatus, User,
+    TicketStatus, PaymentStatus, BarcodeStatus, User, Transfer, TransferStatus,
 )
 from app.schemas.schemas import PurchaseRequest, PurchaseResponse, PaymentStatusOut
 from app.services import mpesa as mpesa_service
 from app.services.totp_service import generate_totp_secret
 from app.core.dependencies import get_current_user
 from app.core.config import get_settings
-from app.worker import mint_ticket_nft
+from app.worker import mint_ticket_nft, settle_resale_transfer
 
 router = APIRouter(prefix="/payments", tags=["Payments"])
 logger = logging.getLogger(__name__)
@@ -49,6 +49,31 @@ def _activate_ticket_for_payment(db: Session, payment: Payment, receipt_number: 
             ticket.tier.tickets_sold += 1
 
     return ticket
+
+
+def _handle_payment_success(db: Session, payment: Payment, receipt_number: str) -> tuple[Ticket | None, Transfer | None]:
+    """
+    Shared success path covering BOTH kinds of payment this app has: an
+    original ticket purchase, and (Work Order 02) a resale purchase. Used by
+    both the real Daraja callback and /dev-confirm below.
+
+    Returns (ticket, None) for an original purchase — caller should queue
+    mint_ticket_nft(ticket.id).
+    Returns (None, transfer) for a resale purchase — caller should queue
+    settle_resale_transfer(transfer.id) instead. The ticket is deliberately
+    NOT re-activated or re-counted here: it's already ACTIVE and was already
+    counted in the event's tickets_sold at its original purchase — doing so
+    again would double-count capacity.
+    """
+    transfer = db.query(Transfer).filter(Transfer.payment_id == payment.id).first()
+    if transfer:
+        payment.status = PaymentStatus.SUCCESS
+        payment.mpesa_receipt_number = receipt_number
+        payment.confirmed_at = datetime.now(timezone.utc)
+        transfer.status = TransferStatus.PAID
+        return None, transfer
+
+    return _activate_ticket_for_payment(db, payment, receipt_number), None
 
 
 @router.post("/purchase", response_model=PurchaseResponse, status_code=status.HTTP_201_CREATED)
@@ -184,27 +209,40 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
             return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
         minted_ticket = None
+        paid_transfer = None
 
         if parsed["success"]:
             # ── Payment confirmed ────────────────────────────────────────────
-            minted_ticket = _activate_ticket_for_payment(db, payment, parsed["receipt_number"])
-            logger.info(f"Ticket {minted_ticket.id if minted_ticket else '?'} activated. Receipt: {parsed['receipt_number']}")
+            minted_ticket, paid_transfer = _handle_payment_success(db, payment, parsed["receipt_number"])
+            if minted_ticket:
+                logger.info(f"Ticket {minted_ticket.id} activated. Receipt: {parsed['receipt_number']}")
+            elif paid_transfer:
+                logger.info(f"Resale transfer {paid_transfer.id} paid. Receipt: {parsed['receipt_number']}")
 
         else:
             # ── Payment failed ───────────────────────────────────────────────
             payment.status = PaymentStatus.FAILED
             payment.failure_reason = parsed.get("result_desc", "Unknown failure")
 
-            ticket = db.query(Ticket).filter(Ticket.id == payment.ticket_id).first()
-            if ticket:
-                ticket.status = TicketStatus.CANCELLED
+            transfer = db.query(Transfer).filter(Transfer.payment_id == payment.id).first()
+            if transfer:
+                # Release the listing back to the seller rather than
+                # cancelling anything — the ticket was never touched.
+                transfer.status = TransferStatus.LISTED
+                transfer.buyer_id = None
+            else:
+                ticket = db.query(Ticket).filter(Ticket.id == payment.ticket_id).first()
+                if ticket:
+                    ticket.status = TicketStatus.CANCELLED
 
-            logger.info(f"Payment failed for ticket {payment.ticket_id}: {payment.failure_reason}")
+            logger.info(f"Payment failed for payment {payment.id}: {payment.failure_reason}")
 
         db.commit()
 
         if minted_ticket:
             mint_ticket_nft.delay(minted_ticket.id)
+        if paid_transfer:
+            settle_resale_transfer.delay(paid_transfer.id)
 
     except Exception as e:
         logger.error(f"Callback processing error: {e}", exc_info=True)
@@ -263,12 +301,15 @@ def dev_confirm_payment(
     if payment.status != PaymentStatus.INITIATED:
         raise HTTPException(status_code=400, detail=f"Payment already {payment.status.value}")
 
-    ticket = _activate_ticket_for_payment(db, payment, receipt_number=f"DEV{payment.id[:8].upper()}")
+    ticket, transfer = _handle_payment_success(db, payment, receipt_number=f"DEV{payment.id[:8].upper()}")
     db.commit()
     db.refresh(payment)
-    logger.info(f"[DEV] Payment {payment.id} manually confirmed. Ticket {ticket.id if ticket else '?'} activated.")
 
     if ticket:
+        logger.info(f"[DEV] Payment {payment.id} manually confirmed. Ticket {ticket.id} activated.")
         mint_ticket_nft.delay(ticket.id)
+    elif transfer:
+        logger.info(f"[DEV] Resale payment {payment.id} manually confirmed. Transfer {transfer.id} paid.")
+        settle_resale_transfer.delay(transfer.id)
 
     return payment

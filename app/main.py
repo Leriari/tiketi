@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from app.core.config import get_settings
-from app.api.routes import auth, events, payments, tickets, gate
+from app.api.routes import auth, events, payments, tickets, gate, resale
 
 settings = get_settings()
 
@@ -38,6 +38,7 @@ app.include_router(events.router,   prefix=PREFIX)
 app.include_router(payments.router, prefix=PREFIX)
 app.include_router(tickets.router,  prefix=PREFIX)
 app.include_router(gate.router,     prefix=PREFIX)
+app.include_router(resale.router,   prefix=PREFIX)
 
 
 @app.get("/", tags=["Health"])

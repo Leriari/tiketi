@@ -32,6 +32,7 @@ celery_app.conf.update(
     enable_utc=True,
     task_routes={
         "app.worker.mint_ticket_nft": {"queue": "blockchain"},
+        "app.worker.settle_resale_transfer": {"queue": "blockchain"},
     },
 )
 
@@ -105,5 +106,119 @@ def mint_ticket_nft(self, ticket_id: str):
 
         logger.info(f"Minted NFT for ticket={ticket_id}: token_id={token_id} tx={tx_hash}")
         return {"status": "minted", "ticket_id": ticket_id, "token_id": token_id, "tx_hash": tx_hash}
+    finally:
+        db.close()
+
+
+# ── Resale settlement (Work Order 02) ──────────────────────────────────────
+
+@celery_app.task(
+    name="app.worker.settle_resale_transfer",
+    bind=True,
+    max_retries=3,
+    default_retry_delay=30,
+)
+def settle_resale_transfer(self, transfer_id: str):
+    """
+    Complete a resale after its M-Pesa payment succeeds: settle the listing
+    on-chain (settleCustodialResale — a real transaction, the on-chain
+    evidence that this sale happened, per Work Order 02), move ticket
+    ownership in the database, rotate the ticket's TOTP credential (the
+    seller's old QR must stop working — this is the exact fraud a working
+    resale system exists to prevent), and record the seller's payout.
+
+    A no-op (logs and returns) if blockchain isn't configured, same
+    reasoning as mint_ticket_nft. A real on-chain failure marks the transfer
+    settlement_failed and retries via Celery's own policy above — the
+    seller has been paid, so this must never silently disappear.
+    """
+    from datetime import datetime, timezone, timedelta
+    from app.db.session import SessionLocal
+    from app.models.models import (
+        Transfer, TransferStatus, TicketStatus, Barcode, BarcodeStatus,
+        WalletTransaction, WalletTransactionType,
+    )
+    from app.services import web3_service
+    from app.services.totp_service import generate_totp_secret
+    from app.core.constants import PLATFORM_FEE_PERCENT
+
+    if not settings.BLOCKCHAIN_CONFIGURED:
+        logger.info(f"[SKIP] Blockchain not configured — transfer={transfer_id} stays unsettled.")
+        return {"status": "skipped", "reason": "not_configured", "transfer_id": transfer_id}
+
+    db = SessionLocal()
+    try:
+        transfer = db.query(Transfer).filter(Transfer.id == transfer_id).first()
+        if not transfer:
+            logger.error(f"settle_resale_transfer: transfer {transfer_id} not found")
+            return {"status": "error", "reason": "transfer_not_found", "transfer_id": transfer_id}
+
+        ticket = transfer.ticket
+        if not ticket or not ticket.nft_token_id:
+            logger.error(f"settle_resale_transfer: ticket for transfer {transfer_id} has no nft_token_id")
+            transfer.status = TransferStatus.SETTLEMENT_FAILED
+            db.commit()
+            return {"status": "error", "reason": "no_nft_token", "transfer_id": transfer_id}
+
+        try:
+            tx_hash = web3_service.settle_custodial_resale_onchain(ticket.nft_token_id)
+        except Exception as exc:
+            logger.error(f"settle_resale_transfer failed for transfer={transfer_id}: {exc}")
+            transfer.status = TransferStatus.SETTLEMENT_FAILED
+            db.commit()
+            raise self.retry(exc=exc)
+
+        # ── Freeze the financial record ──────────────────────────────────
+        tier = ticket.tier
+        royalty_percent = tier.organizer_royalty_percent if tier else 0.0
+        price = transfer.asking_price_kes
+        royalty_kes = round(price * royalty_percent / 100)
+        platform_fee_kes = round(price * PLATFORM_FEE_PERCENT / 100)
+        payout_kes = price - royalty_kes - platform_fee_kes
+
+        transfer.status = TransferStatus.COMPLETED
+        transfer.settlement_tx_hash = tx_hash
+        transfer.transfer_price_kes = price
+        transfer.organizer_royalty_kes = royalty_kes
+        transfer.platform_fee_kes = platform_fee_kes
+        transfer.seller_payout_kes = payout_kes
+        transfer.transferred_at = datetime.now(timezone.utc)
+
+        # ── Move ownership off-chain ──────────────────────────────────────
+        seller_id = ticket.owner_id
+        ticket.owner_id = transfer.buyer_id
+        ticket.status = TicketStatus.ACTIVE
+
+        # ── Rotate the credential ──────────────────────────────────────────
+        for old_barcode in ticket.barcodes:
+            if old_barcode.status == BarcodeStatus.ACTIVE:
+                old_barcode.status = BarcodeStatus.REVOKED
+        latest_version = max((b.token_version for b in ticket.barcodes), default=0)
+        db.add(Barcode(
+            ticket_id=ticket.id,
+            event_id=ticket.event_id,
+            owner_id=transfer.buyer_id,
+            token=generate_totp_secret(),
+            token_version=latest_version + 1,
+            status=BarcodeStatus.ACTIVE,
+        ))
+
+        # ── Record the seller's payout ─────────────────────────────────────
+        event = transfer.event
+        available_at = (
+            event.event_date + timedelta(days=2) if event else datetime.now(timezone.utc)
+        )
+        db.add(WalletTransaction(
+            user_id=seller_id,
+            transfer_id=transfer.id,
+            type=WalletTransactionType.SALE,
+            description=f"Resale · {event.title if event else 'ticket'}",
+            amount_kes=payout_kes,
+            available_at=available_at,
+        ))
+
+        db.commit()
+        logger.info(f"Settled resale transfer={transfer_id}: tx={tx_hash}, new owner={transfer.buyer_id}")
+        return {"status": "completed", "transfer_id": transfer_id, "tx_hash": tx_hash}
     finally:
         db.close()

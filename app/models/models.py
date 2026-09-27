@@ -11,11 +11,12 @@ import enum
 # NOTE ON SCOPE (Phase 1 — schema alignment to the ChainTix report, §4.4.2 / Figure 4.6):
 # This module now mirrors the report's 14-table design (accounts→User, organizers,
 # organizer_members, events, event_tiers, tickets, payments, barcodes, price_caps,
-# transfers, gate_scanners, attendances, audit_logs, notifications). Only User,
-# Event, EventTier, Ticket, Payment, and Barcode are actually written to by routes
-# in this phase — the rest exist as schema-complete but unwired tables, ready for
-# the API work planned in Phase 2. See the ChainTix report memory / project plan
-# for the full rationale behind each entity.
+# transfers, gate_scanners, attendances, audit_logs, notifications). User, Event,
+# EventTier, Ticket, Payment, Barcode, and (as of Work Order 02) Transfer are
+# written to by routes — Organizer, OrganizerMember, PriceCap, GateScanner,
+# Attendance, AuditLog, and Notification remain schema-complete but unwired.
+# See the ChainTix report memory / project plan for the full rationale behind
+# each entity.
 #
 # Known deviation from the report: money fields stay Float (matching the existing
 # Phase-1 codebase convention) rather than Integer KES as the report recommends —
@@ -80,6 +81,17 @@ class TransferType(str, enum.Enum):
     GIFT    = "gift"
 
 
+class TransferStatus(str, enum.Enum):
+    LISTED             = "listed"              # on-chain listForResale succeeded, buyable
+    PAUSED              = "paused"              # seller-hidden, not buyable; reprice relists it
+    PENDING_PAYMENT     = "pending_payment"     # a buyer's STK push is in flight
+    PAID                = "paid"                # M-Pesa confirmed; on-chain settlement queued
+    COMPLETED           = "completed"           # settleCustodialResale succeeded, ownership moved
+    CANCELLED           = "cancelled"
+    EXPIRED             = "expired"
+    SETTLEMENT_FAILED   = "settlement_failed"   # paid, but the on-chain settlement tx failed — retryable
+
+
 class GateScannerStatus(str, enum.Enum):
     ACTIVE    = "active"
     INACTIVE  = "inactive"
@@ -93,6 +105,17 @@ class AttendanceStatus(str, enum.Enum):
 class NotificationStatus(str, enum.Enum):
     PENDING  = "pending"
     SENT     = "sent"
+    FAILED   = "failed"
+
+
+class WalletTransactionType(str, enum.Enum):
+    SALE        = "sale"
+    WITHDRAWAL  = "withdrawal"
+
+
+class WalletTransactionStatus(str, enum.Enum):
+    SUCCESS  = "success"
+    PENDING  = "pending"
     FAILED   = "failed"
 
 
@@ -261,7 +284,11 @@ class Ticket(Base):
     event: Mapped["Event"] = relationship("Event", back_populates="tickets")
     tier: Mapped["EventTier | None"] = relationship("EventTier", back_populates="tickets")
     owner: Mapped["User"] = relationship("User", back_populates="tickets")
-    payment: Mapped["Payment | None"] = relationship("Payment", back_populates="ticket", uselist=False)
+    # A list, not a single object — a ticket gets one Payment for its original
+    # purchase, then one more each time it's resold.
+    payments: Mapped[list["Payment"]] = relationship(
+        "Payment", back_populates="ticket", order_by="Payment.initiated_at"
+    )
     barcodes: Mapped[list["Barcode"]] = relationship("Barcode", back_populates="ticket")
 
     @property
@@ -283,7 +310,9 @@ class Payment(Base):
     __tablename__ = "payments"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    ticket_id: Mapped[str] = mapped_column(ForeignKey("tickets.id"), nullable=False, unique=True)
+    # Not unique — a ticket has one Payment for its original purchase, then
+    # one more each time it's resold (see Transfer.payment_id).
+    ticket_id: Mapped[str] = mapped_column(ForeignKey("tickets.id"), nullable=False)
     tier_id: Mapped[str | None] = mapped_column(ForeignKey("event_tiers.id"))
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
 
@@ -302,7 +331,7 @@ class Payment(Base):
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime)
     failure_reason: Mapped[str | None] = mapped_column(String(255))
 
-    ticket: Mapped["Ticket"] = relationship("Ticket", back_populates="payment")
+    ticket: Mapped["Ticket"] = relationship("Ticket", back_populates="payments")
     tier: Mapped["EventTier | None"] = relationship("EventTier", back_populates="payments")
     user: Mapped["User"] = relationship("User", back_populates="payments")
 
@@ -349,20 +378,55 @@ class PriceCap(Base):
 
 
 class Transfer(Base):
-    """Completed secondary-market transaction (resale or gift). Not yet wired to any route."""
+    """
+    A resale listing and, if it sells, the completed secondary-market
+    transaction — one row covers the whole lifecycle (Work Order 02).
+
+    created_at is when the listing was made; transferred_at is set only once
+    the sale actually completes (on-chain settlement succeeded), so it stays
+    null for a listing that's merely active, cancelled, or expired.
+    """
     __tablename__ = "transfers"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     ticket_id: Mapped[str] = mapped_column(ForeignKey("tickets.id"), nullable=False)
+    event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), nullable=False)
     seller_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
     buyer_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
     payment_id: Mapped[str | None] = mapped_column(ForeignKey("payments.id"))
 
     transfer_type: Mapped[TransferType] = mapped_column(SAEnum(TransferType), default=TransferType.RESALE)
+    status: Mapped[TransferStatus] = mapped_column(SAEnum(TransferStatus), default=TransferStatus.LISTED)
+
+    # The seller's ask (set at listing time) vs. the price actually paid
+    # (frozen at settlement — for resale today these are always equal, since
+    # there's no offer/negotiation flow, but the work order asks for both to
+    # exist as distinct fields rather than conflating "listed for" with "sold for").
+    asking_price_kes: Mapped[float] = mapped_column(Float, nullable=False)
     transfer_price_kes: Mapped[float | None] = mapped_column(Float)
+
+    # Frozen at settlement — computed live (as a hint) from asking_price_kes
+    # while a listing is merely active; see app/api/routes/resale.py.
     organizer_royalty_kes: Mapped[float | None] = mapped_column(Float)
-    transferred_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    platform_fee_kes: Mapped[float | None] = mapped_column(Float)
+    seller_payout_kes: Mapped[float | None] = mapped_column(Float)
+
+    # On-chain evidence trail
+    listing_tx_hash: Mapped[str | None] = mapped_column(String(66))
+    settlement_tx_hash: Mapped[str | None] = mapped_column(String(66))
+
+    views: Mapped[int] = mapped_column(Integer, default=0)
+    pause_reason: Mapped[str | None] = mapped_column(String(255))
+
+    transferred_at: Mapped[datetime | None] = mapped_column(DateTime)
+    cancelled_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    ticket: Mapped["Ticket"] = relationship("Ticket")
+    event: Mapped["Event"] = relationship("Event")
+    seller: Mapped["User"] = relationship("User", foreign_keys=[seller_id])
+    buyer: Mapped["User | None"] = relationship("User", foreign_keys=[buyer_id])
+    payment: Mapped["Payment | None"] = relationship("Payment")
 
 
 class GateScanner(Base):
@@ -407,6 +471,39 @@ class AuditLog(Base):
     action_type: Mapped[str] = mapped_column(String(50), nullable=False)
     target_id: Mapped[str | None] = mapped_column(String(36))
     target_type: Mapped[str | None] = mapped_column(String(50))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class WalletTransaction(Base):
+    """
+    A seller's earnings ledger (Work Order 02). One row per completed resale
+    payout or M-Pesa withdrawal. No table for this existed in the original
+    14-table schema — resale payouts are new money movement this project
+    didn't have before, so this is an addition, not a repurposing of an
+    unwired table like Transfer was.
+
+    available_at gates a "sale" row out of the available balance until the
+    event has actually happened (+2 days) — mirroring the frontend's own
+    escrow-window convention (see EscrowBanner.jsx) rather than inventing a
+    different one. There is no dispute system built in this work order, so
+    unlike the mock's computeWallet(), nothing here ever holds a balance for
+    a dispute — the "on hold" bucket a real dispute system would feed stays
+    permanently 0 until that feature exists.
+    """
+    __tablename__ = "wallet_transactions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    transfer_id: Mapped[str | None] = mapped_column(ForeignKey("transfers.id"))
+
+    type: Mapped[WalletTransactionType] = mapped_column(SAEnum(WalletTransactionType), nullable=False)
+    description: Mapped[str] = mapped_column(String(255), nullable=False)
+    # Signed KES — positive for a sale payout, negative for a withdrawal.
+    amount_kes: Mapped[float] = mapped_column(Float, nullable=False)
+    status: Mapped[WalletTransactionStatus] = mapped_column(
+        SAEnum(WalletTransactionStatus), default=WalletTransactionStatus.SUCCESS
+    )
+    available_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
