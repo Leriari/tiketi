@@ -173,6 +173,63 @@ class PaymentStatusOut(BaseModel):
 
 # ─── TOTP / QR ────────────────────────────────────────────────────────────────
 
+# ─── Resale (Work Order 02) ───────────────────────────────────────────────────
+# Response shapes are built as plain dicts in app/api/routes/resale.py rather
+# than modeled here — the frontend's mock API mixes snake_case (most fields)
+# and camelCase (the dashboard/wallet summary endpoints) inconsistently, and
+# matching it exactly (per Work Order 02: "do not redesign the Seller Portal")
+# matters more than a uniform schema would. Only request bodies are modeled
+# below, where real validation is worth having.
+
+class ResaleListingCreate(BaseModel):
+    ticket_id: str
+    price_kes: float
+
+    @field_validator("price_kes")
+    @classmethod
+    def positive_price(cls, v):
+        if v <= 0:
+            raise ValueError("Price must be positive")
+        return v
+
+
+class ResaleRepriceRequest(BaseModel):
+    price_kes: float
+
+    @field_validator("price_kes")
+    @classmethod
+    def positive_price(cls, v):
+        if v <= 0:
+            raise ValueError("Price must be positive")
+        return v
+
+
+class ResaleBuyRequest(BaseModel):
+    phone_number: str
+
+    @field_validator("phone_number")
+    @classmethod
+    def validate_phone(cls, v):
+        return normalize_kenyan_phone(v)
+
+
+class ResaleWithdrawRequest(BaseModel):
+    amount_kes: float
+    phone_number: str
+
+    @field_validator("phone_number")
+    @classmethod
+    def validate_phone(cls, v):
+        return normalize_kenyan_phone(v)
+
+    @field_validator("amount_kes")
+    @classmethod
+    def positive_amount(cls, v):
+        if v <= 0:
+            raise ValueError("Amount must be positive")
+        return v
+
+
 class TicketSeedResponse(BaseModel):
     """Returned to the authenticated ticket app — contains the TOTP secret."""
     ticket_id: str

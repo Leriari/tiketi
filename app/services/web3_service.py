@@ -22,10 +22,12 @@ security questions well beyond this integration's scope.
 """
 import json
 import logging
+import re
 from pathlib import Path
 from functools import lru_cache
 
 from web3 import Web3
+from web3.exceptions import ContractLogicError
 from eth_account import Account
 
 from app.core.config import get_settings
@@ -62,6 +64,42 @@ def _require_configured():
             "Blockchain not configured — set BLOCKCHAIN_RPC_URL, "
             "NFT_CONTRACT_ADDRESS, and MINTER_PRIVATE_KEY to enable minting."
         )
+
+
+class ContractRevertError(Exception):
+    """
+    The chain itself rejected the call — as opposed to a RuntimeError from
+    this module's own preconditions (e.g. blockchain not configured). Carries
+    the exact on-chain revert message so a route can surface it to the user
+    verbatim, e.g. "TiketiNFT: price exceeds resale cap" — that message IS
+    the anti-scalping enforcement; see resale.py's listing endpoint.
+    """
+
+
+_REVERT_REASON_QUOTED = re.compile(r"reverted with reason string '([^']*)'")
+
+
+def _revert_message(exc: ContractLogicError) -> str:
+    """
+    Extract just the contract's own require() string from web3.py's
+    exception, whatever wrapper text the connected node puts around it.
+
+    Confirmed empirically (not assumed) that this varies by node: a local
+    Hardhat node wraps it as "execution reverted: Error: VM Exception while
+    processing transaction: reverted with reason string 'X'", not the
+    simpler "execution reverted: X" this originally assumed — a real,
+    node-specific formatting difference, not a hypothetical one. Handles
+    both: regex out the quoted reason if that wrapper is present, else fall
+    back to stripping a plain "execution reverted: " prefix.
+    """
+    msg = str(exc)
+    match = _REVERT_REASON_QUOTED.search(msg)
+    if match:
+        return match.group(1)
+    prefix = "execution reverted: "
+    if msg.startswith(prefix):
+        return msg[len(prefix):]
+    return msg
 
 
 def _uuid_to_uint256(value: str) -> int:
@@ -129,4 +167,49 @@ def mark_used_onchain(token_id: int) -> str:
     contract = _get_contract()
     fn = contract.functions.markUsed(token_id)
     receipt = _send_transaction(fn)
+    return receipt["transactionHash"].hex()
+
+
+def list_for_resale_onchain(token_id: int, price_kes: int) -> str:
+    """
+    List a custodial ticket for resale. Returns the tx hash on success.
+
+    Raises ContractRevertError if the chain rejects the price — most
+    importantly when it exceeds this ticket's on-chain resale cap. That
+    revert IS the anti-scalping enforcement (Work Order 02's central rule):
+    this function must never pre-validate the price itself and skip the
+    call, only relay whatever the chain decides.
+
+    Simulates the call first (a free eth_call, no gas spent) so a reverting
+    price is caught with its exact message before any real transaction is
+    sent, rather than only after paying to find out.
+    """
+    _require_configured()
+    contract = _get_contract()
+    account = Account.from_key(settings.MINTER_PRIVATE_KEY)
+    fn = contract.functions.listForResale(int(token_id), int(price_kes))
+
+    try:
+        fn.call({"from": account.address})
+    except ContractLogicError as e:
+        raise ContractRevertError(_revert_message(e)) from e
+
+    receipt = _send_transaction(fn)
+    return receipt["transactionHash"].hex()
+
+
+def settle_custodial_resale_onchain(token_id: int) -> str:
+    """
+    Settle a resale that was paid for off-chain in KES. Returns the tx hash.
+    Raises on failure (including ContractRevertError if, e.g., the listing
+    was somehow already cleared) — the caller (the Celery settlement task)
+    is responsible for retrying or marking the transfer settlement_failed.
+    """
+    _require_configured()
+    contract = _get_contract()
+    fn = contract.functions.settleCustodialResale(int(token_id))
+    try:
+        receipt = _send_transaction(fn)
+    except ContractLogicError as e:
+        raise ContractRevertError(_revert_message(e)) from e
     return receipt["transactionHash"].hex()
