@@ -87,17 +87,23 @@ export const liveApi = {
   transferTicket: notImplemented("transferTicket"),
   claimTicketToWallet: notImplemented("claimTicketToWallet"),
 
-  // Seller Portal (spec.md §4) — Phase 6 resale marketplace, no backend yet.
-  getEligibleTickets: notImplemented("getEligibleTickets"),
-  sellTicket: notImplemented("sellTicket"),
-  getSellerDashboard: notImplemented("getSellerDashboard"),
-  getMyListings: notImplemented("getMyListings"),
-  repriceListing: notImplemented("repriceListing"),
-  pauseListing: notImplemented("pauseListing"),
-  cancelListing: notImplemented("cancelListing"),
-  getWallet: notImplemented("getWallet"),
-  withdrawToMpesa: notImplemented("withdrawToMpesa"),
-  getDisputes: notImplemented("getDisputes"),
+  // Seller Portal (spec.md §4) — wired to the real resale backend
+  // (Work Order 02). getOrganiserDashboard/getTicketDetail/transferTicket/
+  // claimTicketToWallet above stay stubs — out of this work order's scope.
+  getEligibleTickets: () => request("/resale/eligible-tickets"),
+  sellTicket: (ticketId, { price }) =>
+    request("/resale/listings", { method: "POST", body: { ticket_id: ticketId, price_kes: price } })
+      .then((listing) => ({ listing_id: listing.id, status: listing.status })),
+  getSellerDashboard: () => request("/resale/dashboard"),
+  getMyListings: () => request("/resale/my-listings"),
+  repriceListing: (listingId, { price }) =>
+    request(`/resale/listings/${listingId}/reprice`, { method: "POST", body: { price_kes: price } }),
+  pauseListing: (listingId) => request(`/resale/listings/${listingId}/pause`, { method: "POST" }),
+  cancelListing: (listingId) => request(`/resale/listings/${listingId}`, { method: "DELETE" }),
+  getWallet: () => request("/resale/wallet"),
+  withdrawToMpesa: ({ amount, phoneNumber }) =>
+    request("/resale/withdraw", { method: "POST", body: { amount_kes: amount, phone_number: phoneNumber } }),
+  getDisputes: () => request("/resale/disputes"),
 
   // Organiser Console (spec.md §5) — no backend yet.
   getOrganiserProfile: notImplemented("getOrganiserProfile"),
