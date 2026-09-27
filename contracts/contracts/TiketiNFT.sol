@@ -55,6 +55,9 @@ contract TiketiNFT is ERC721, ERC2981, Ownable, ReentrancyGuard {
         uint256 salePriceWei,
         uint256 royaltyPaidWei
     );
+    /// @notice A resale settled through the custodial/fiat path (M-Pesa), not
+    /// through buyResale's on-chain ETH payment. See settleCustodialResale.
+    event CustodialResaleSettled(uint256 indexed tokenId, uint256 salePriceKes);
     event TicketUsed(uint256 indexed tokenId, address indexed holder);
     event TicketClaimed(uint256 indexed tokenId, address indexed from, address indexed to);
 
@@ -146,6 +149,28 @@ contract TiketiNFT is ERC721, ERC2981, Ownable, ReentrancyGuard {
         }
 
         emit ResaleCompleted(tokenId, seller, msg.sender, msg.value, royaltyAmount);
+    }
+
+    /// @notice Settle a resale that was paid for off-chain in KES (M-Pesa), not
+    /// through buyResale's ETH payment. Minter-only — the backend calls this
+    /// only after confirming the M-Pesa payment succeeded.
+    ///
+    /// Every custodially-held ticket's on-chain owner is the minter both
+    /// before and after this call (buyer identity is tracked off-chain in the
+    /// backend's database — see web3_service.py's module docstring for why),
+    /// so unlike buyResale there is no ERC-721 ownership change to make here.
+    /// What this function provides is the thing the fiat path otherwise
+    /// lacks entirely: a real on-chain transaction — a permanent, public
+    /// record that this specific listing was consumed and settled, at this
+    /// block, for this KES price — rather than the sale existing only as a
+    /// row in the backend's database.
+    function settleCustodialResale(uint256 tokenId) external onlyMinter {
+        require(_exists(tokenId), "TiketiNFT: token does not exist");
+        uint256 priceKes = listingPriceKes[tokenId];
+        require(priceKes > 0, "TiketiNFT: not listed for resale");
+
+        listingPriceKes[tokenId] = 0;
+        emit CustodialResaleSettled(tokenId, priceKes);
     }
 
     /// @notice Mark a ticket used at the gate. Minter-only, one-time.

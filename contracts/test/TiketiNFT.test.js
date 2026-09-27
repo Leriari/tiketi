@@ -226,6 +226,53 @@ describe("TiketiNFT", function () {
     });
   });
 
+  // ── Custodial resale settlement (fiat/M-Pesa path) ───────────────────────
+  describe("settleCustodialResale — custodial (fiat) resale settlement", function () {
+    it("clears the listing and emits CustodialResaleSettled", async function () {
+      const { nft, minterWallet, buyer } = await loadFixture(deployFixture);
+      // Custodial tickets are minted to the minter itself — the backend is
+      // both the token owner and the caller of listForResale/settleCustodialResale.
+      const tokenId = await mintOne(nft, minterWallet, minterWallet);
+      await nft.connect(minterWallet).listForResale(tokenId, FACE_PRICE_KES);
+
+      await expect(nft.connect(minterWallet).settleCustodialResale(tokenId))
+        .to.emit(nft, "CustodialResaleSettled")
+        .withArgs(tokenId, FACE_PRICE_KES);
+
+      expect(await nft.listingPriceKes(tokenId)).to.equal(0n);
+      // Custodial ownership never moves on-chain — see the function's own
+      // NatSpec for why. It stays with the minter throughout.
+      expect(await nft.ownerOf(tokenId)).to.equal(minterWallet.address);
+    });
+
+    it("reverts if the token was never listed", async function () {
+      const { nft, minterWallet } = await loadFixture(deployFixture);
+      const tokenId = await mintOne(nft, minterWallet, minterWallet);
+      await expect(
+        nft.connect(minterWallet).settleCustodialResale(tokenId)
+      ).to.be.revertedWith("TiketiNFT: not listed for resale");
+    });
+
+    it("reverts for a non-minter", async function () {
+      const { nft, minterWallet, other } = await loadFixture(deployFixture);
+      const tokenId = await mintOne(nft, minterWallet, minterWallet);
+      await nft.connect(minterWallet).listForResale(tokenId, FACE_PRICE_KES);
+      await expect(
+        nft.connect(other).settleCustodialResale(tokenId)
+      ).to.be.revertedWith("TiketiNFT: caller is not the minter");
+    });
+
+    it("cannot be settled twice", async function () {
+      const { nft, minterWallet } = await loadFixture(deployFixture);
+      const tokenId = await mintOne(nft, minterWallet, minterWallet);
+      await nft.connect(minterWallet).listForResale(tokenId, FACE_PRICE_KES);
+      await nft.connect(minterWallet).settleCustodialResale(tokenId);
+      await expect(
+        nft.connect(minterWallet).settleCustodialResale(tokenId)
+      ).to.be.revertedWith("TiketiNFT: not listed for resale");
+    });
+  });
+
   // ── Double-spend prevention ──────────────────────────────────────────────
   describe("markUsed — double-spend prevention", function () {
     it("marks a ticket used and emits TicketUsed", async function () {
