@@ -70,6 +70,25 @@
         "type": "uint256"
       },
       {
+        "indexed": false,
+        "internalType": "uint256",
+        "name": "salePriceKes",
+        "type": "uint256"
+      }
+    ],
+    "name": "CustodialResaleSettled",
+    "type": "event"
+  },
+  {
+    "anonymous": false,
+    "inputs": [
+      {
+        "indexed": true,
+        "internalType": "uint256",
+        "name": "tokenId",
+        "type": "uint256"
+      },
+      {
         "indexed": true,
         "internalType": "address",
         "name": "seller",
@@ -636,6 +655,19 @@
       }
     ],
     "name": "setMinter",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [
+      {
+        "internalType": "uint256",
+        "name": "tokenId",
+        "type": "uint256"
+      }
+    ],
+    "name": "settleCustodialResale",
     "outputs": [],
     "stateMutability": "nonpayable",
     "type": "function"
