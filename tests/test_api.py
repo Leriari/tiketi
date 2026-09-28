@@ -279,6 +279,111 @@ def test_full_mpesa_flow(auth_headers, test_event, monkeypatch):
     assert "Already used" in scan2["reason"]
 
 
+# ── Multi-ticket / repeat purchase ──────────────────────────────────────────────
+
+def test_purchase_quantity_creates_one_payment_and_n_tickets(test_event, monkeypatch):
+    from app.services import mpesa as mpesa_svc
+    from app.worker import mint_ticket_nft
+    import uuid
+
+    phone = "0700222333"
+    login_res = client.post("/api/v1/auth/login", json={"phone_number": phone})
+    headers = {"Authorization": f"Bearer {login_res.json()['access_token']}"}
+
+    checkout_id = f"test-checkout-{uuid.uuid4().hex[:8]}"
+
+    async def mock_stk_push(**kwargs):
+        return {
+            "MerchantRequestID": f"test-merchant-{uuid.uuid4().hex[:8]}",
+            "CheckoutRequestID": checkout_id,
+            "ResponseCode": "0",
+        }
+
+    monkeypatch.setattr(mpesa_svc, "stk_push", mock_stk_push)
+    monkeypatch.setattr(mint_ticket_nft, "delay", lambda *a, **kw: None)
+
+    res = client.post("/api/v1/payments/purchase", json={
+        "event_id": test_event["id"],
+        "phone_number": phone,
+        "quantity": 3,
+    }, headers=headers)
+    assert res.status_code == 201, res.text
+    data = res.json()
+    assert len(data["ticket_ids"]) == 3
+    assert data["ticket_id"] == data["ticket_ids"][0]
+    payment_id = data["payment_id"]
+
+    res = client.get(f"/api/v1/payments/{payment_id}/status", headers=headers)
+    assert res.json()["amount_kes"] == test_event["ticket_price_kes"] * 3
+
+    res = client.post(f"/api/v1/payments/{payment_id}/dev-confirm", headers=headers)
+    assert res.status_code == 200
+
+    res = client.get("/api/v1/tickets/my", headers=headers)
+    tickets = res.json()
+    assert len(tickets) == 3
+    assert all(t["status"] == "active" for t in tickets)
+    assert {t["id"] for t in tickets} == set(data["ticket_ids"])
+
+
+def test_purchase_quantity_rejects_more_than_remaining_capacity(auth_headers):
+    res = client.post("/api/v1/events/", json={
+        "title": "Tiny Capacity Event",
+        "venue": "Test Venue",
+        "event_date": "2027-01-01T18:00:00",
+        "organizer_phone": "0700000000",
+        "ticket_price_kes": 100,
+        "total_capacity": 2,
+    }, headers=auth_headers)
+    event = res.json()
+
+    res = client.post("/api/v1/payments/purchase", json={
+        "event_id": event["id"],
+        "phone_number": "0700333444",
+        "quantity": 3,
+    }, headers=auth_headers)
+    assert res.status_code == 400
+
+
+def test_can_purchase_same_event_more_than_once(auth_headers, test_event, monkeypatch):
+    """
+    test_full_mpesa_flow already bought this user one ticket for test_event —
+    the old code blocked a second purchase for the same event entirely.
+    """
+    from app.services import mpesa as mpesa_svc
+    from app.worker import mint_ticket_nft
+    import uuid
+
+    checkout_id = f"test-checkout-{uuid.uuid4().hex[:8]}"
+
+    async def mock_stk_push(**kwargs):
+        return {
+            "MerchantRequestID": f"test-merchant-{uuid.uuid4().hex[:8]}",
+            "CheckoutRequestID": checkout_id,
+            "ResponseCode": "0",
+        }
+
+    monkeypatch.setattr(mpesa_svc, "stk_push", mock_stk_push)
+    monkeypatch.setattr(mint_ticket_nft, "delay", lambda *a, **kw: None)
+
+    res = client.get("/api/v1/tickets/my", headers=auth_headers)
+    before_count = len(res.json())
+    assert before_count >= 1  # from test_full_mpesa_flow
+
+    res = client.post("/api/v1/payments/purchase", json={
+        "event_id": test_event["id"],
+        "phone_number": "0712345678",
+    }, headers=auth_headers)
+    assert res.status_code == 201, res.text
+    payment_id = res.json()["payment_id"]
+
+    res = client.post(f"/api/v1/payments/{payment_id}/dev-confirm", headers=auth_headers)
+    assert res.status_code == 200
+
+    res = client.get("/api/v1/tickets/my", headers=auth_headers)
+    assert len(res.json()) == before_count + 1
+
+
 # ── Gate Sync Auth Tests ───────────────────────────────────────────────────────
 
 def test_sync_event_requires_auth(test_event):

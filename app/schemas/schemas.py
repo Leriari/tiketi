@@ -1,4 +1,4 @@
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from datetime import datetime
 from typing import Optional
 import phonenumbers
@@ -90,6 +90,24 @@ class EventCreate(BaseModel):
         return v
 
 
+class TierOut(BaseModel):
+    """
+    The frontend (built against the mock backend) expects every event to
+    carry a `tiers[]` array — EventDetail.jsx and Checkout.jsx both call
+    `event.tiers.find(...)` directly and crash if it's undefined. The real
+    backend already creates one EventTier row per event (see events.py);
+    this was just never exposed through the API. Field names here match
+    what the frontend reads (name/price), not the ORM's own column names
+    (tier_name/price_kes) — aliased below rather than renaming either side.
+    """
+    id: str
+    name: str = Field(validation_alias="tier_name")
+    price: float = Field(validation_alias="price_kes")
+    tickets_remaining: int
+
+    model_config = {"from_attributes": True, "populate_by_name": True}
+
+
 class EventOut(BaseModel):
     id: str
     title: str
@@ -105,6 +123,7 @@ class EventOut(BaseModel):
     contract_address: Optional[str]
     status: str
     created_at: datetime
+    tiers: list[TierOut] = []
 
     model_config = {"from_attributes": True}
 
@@ -133,15 +152,26 @@ class PurchaseRequest(BaseModel):
     # Optional — omitted requests resolve to the event's only/first tier (Phase 1).
     # Becomes meaningful once events can have multiple tiers (Phase 2).
     tier_id: Optional[str] = None
+    quantity: int = 1
 
     @field_validator("phone_number")
     @classmethod
     def validate_phone(cls, v):
         return normalize_kenyan_phone(v)
 
+    @field_validator("quantity")
+    @classmethod
+    def sane_quantity(cls, v):
+        if v < 1:
+            raise ValueError("Quantity must be at least 1")
+        if v > 10:
+            raise ValueError("Maximum 10 tickets per purchase")
+        return v
+
 
 class PurchaseResponse(BaseModel):
-    ticket_id: str
+    ticket_id: str  # the first/primary ticket — kept for backward compatibility
+    ticket_ids: list[str]  # every ticket this purchase created (length == quantity)
     payment_id: str
     checkout_request_id: str
     message: str = "STK push sent. Confirm payment on your phone."
