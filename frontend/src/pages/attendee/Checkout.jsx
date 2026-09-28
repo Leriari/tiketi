@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate, useParams, useSearchParams } from "react-router-dom";
-import { Smartphone, RotateCcw } from "lucide-react";
+import { Smartphone, RotateCcw, Minus, Plus, Zap } from "lucide-react";
 import { api, ApiError } from "../../api";
 import { useAuth } from "../../context/AuthContext";
 import { useApiData } from "../../lib/useApiData";
@@ -9,7 +9,9 @@ import {
 } from "../../components/ui";
 import { isValidKenyanPhone, normalizeKenyanPhone, maskPhone } from "../../format";
 
-const SERVICE_FEE_KES = 50;
+const MAX_QUANTITY = 10;
+
+const SERVICE_FEE_KES = 2;
 const POLL_MS = 2000;
 const WAIT_SECONDS = 60;
 
@@ -29,11 +31,18 @@ export default function Checkout() {
   const [step, setStep] = useState(0); // 0 Details, 1 Payment
   const [error, setError] = useState(null);
   const [submitting, setSubmitting] = useState(false);
+  const [quantity, setQuantity] = useState(1);
+  const [isDev, setIsDev] = useState(false);
+  const [simulating, setSimulating] = useState(false);
 
   // wait: null | { paymentId, ticketId, secondsLeft, terminal: null|'timeout'|'failed', reason }
   const [wait, setWait] = useState(null);
   const pollRef = useRef(null);
   const tickRef = useRef(null);
+
+  useEffect(() => {
+    api.health().then((h) => setIsDev(h.env === "development")).catch(() => {});
+  }, []);
 
   useEffect(() => () => {
     clearInterval(pollRef.current);
@@ -58,7 +67,8 @@ export default function Checkout() {
   }
 
   const tier = event.tiers.find((t) => t.id === tierId) || event.tiers[0];
-  const subtotal = tier.price;
+  const maxQuantity = Math.min(MAX_QUANTITY, tier.tickets_remaining || MAX_QUANTITY);
+  const subtotal = tier.price * quantity;
   const total = subtotal + SERVICE_FEE_KES;
 
   function validatePhone() {
@@ -79,7 +89,12 @@ export default function Checkout() {
       // No separate login screen for attendees (spec.md §3 never lists one) —
       // the checkout phone number *is* how identity is established.
       await login(normalizeKenyanPhone(phone));
-      const res = await api.purchaseTicket({ event_id: event.id, tier_id: tier.id, phone_number: normalizeKenyanPhone(phone) });
+      const res = await api.purchaseTicket({
+        event_id: event.id,
+        tier_id: tier.id,
+        phone_number: normalizeKenyanPhone(phone),
+        quantity,
+      });
       setStep(1);
       startWait(res.payment_id, res.ticket_id);
     } catch (err) {
@@ -134,19 +149,55 @@ export default function Checkout() {
     setStep(0);
   }
 
+  async function handleSimulateSuccess() {
+    if (!wait) return;
+    setSimulating(true);
+    try {
+      await api.devConfirmPayment(wait.paymentId);
+      // The existing poll interval picks up the success within POLL_MS and
+      // navigates on its own — no need to duplicate that here.
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't simulate the payment.");
+    } finally {
+      setSimulating(false);
+    }
+  }
+
   return (
     <div className="mx-auto max-w-lg px-4 py-8 flex flex-col gap-6">
       <TimelineStepper steps={STEPS} activeIndex={step} />
 
       <Card className="flex flex-col gap-3">
         <h2 className="text-h3 text-ink-primary">{event.title}</h2>
+
+        <div className="flex items-center justify-between">
+          <span className="text-body-sm text-ink-secondary">{tier.name}</span>
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              aria-label="Decrease quantity"
+              disabled={quantity <= 1}
+              onClick={() => setQuantity((q) => Math.max(1, q - 1))}
+              className="flex h-7 w-7 items-center justify-center rounded-full border border-line-strong text-ink-primary disabled:opacity-40 disabled:cursor-not-allowed hover:border-brand-primary"
+            >
+              <Minus size={14} />
+            </button>
+            <span className="w-4 text-center text-body font-semibold tabular-nums text-ink-primary">{quantity}</span>
+            <button
+              type="button"
+              aria-label="Increase quantity"
+              disabled={quantity >= maxQuantity}
+              onClick={() => setQuantity((q) => Math.min(maxQuantity, q + 1))}
+              className="flex h-7 w-7 items-center justify-center rounded-full border border-line-strong text-ink-primary disabled:opacity-40 disabled:cursor-not-allowed hover:border-brand-primary"
+            >
+              <Plus size={14} />
+            </button>
+          </div>
+        </div>
+
         <div className="flex flex-col gap-1.5 text-body-sm">
           <div className="flex justify-between text-ink-secondary">
-            <span>{tier.name} × 1</span>
-            <MoneyText value={tier.price} size="body" />
-          </div>
-          <div className="flex justify-between text-ink-secondary">
-            <span>Subtotal</span>
+            <span>{tier.name} × {quantity}</span>
             <MoneyText value={subtotal} size="body" />
           </div>
           <div className="flex justify-between text-ink-secondary">
@@ -194,6 +245,18 @@ export default function Checkout() {
               <span className="text-h3 font-bold tabular-nums text-ink-primary">{wait.secondsLeft}</span>
             </CountdownRing>
             <p className="text-caption text-ink-tertiary tabular-nums">STK push sent to {maskPhone(normalizeKenyanPhone(phone))}</p>
+            {isDev && (
+              <Button
+                variant="secondary"
+                size="sm"
+                iconLeft={<Zap size={14} />}
+                loading={simulating}
+                onClick={handleSimulateSuccess}
+                className="mt-1"
+              >
+                Simulate M-Pesa success (dev only)
+              </Button>
+            )}
           </div>
         )}
 
