@@ -83,7 +83,7 @@ export const liveApi = {
   // UI-only features with no backend yet — see mock/mockApi.js for what
   // they'll eventually need to do.
   getOrganiserDashboard: notImplemented("getOrganiserDashboard"),
-  getTicketDetail: notImplemented("getTicketDetail"),
+  getTicketDetail: (ticketId) => request(`/tickets/${ticketId}/detail`),
   transferTicket: notImplemented("transferTicket"),
   claimTicketToWallet: notImplemented("claimTicketToWallet"),
 
