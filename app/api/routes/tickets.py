@@ -28,6 +28,48 @@ def get_my_tickets(
     )
 
 
+@router.get("/{ticket_id}/detail")
+def get_ticket_detail(
+    ticket_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Everything the Attendee frontend's Confirmation/TicketCredential pages
+    need in one call — event/tier info, plus real on-chain mint status.
+    chain_status flips pending -> verified once mint_ticket_nft actually
+    completes (nft_token_id gets set); nft_tx_hash is the real transaction
+    hash once it exists, not a placeholder — these pages poll this endpoint
+    specifically to show that real transition happening.
+    """
+    ticket = (
+        db.query(Ticket)
+        .filter(Ticket.id == ticket_id, Ticket.owner_id == current_user.id)
+        .first()
+    )
+    if not ticket:
+        raise HTTPException(status_code=404, detail="Ticket not found")
+
+    event = ticket.event
+    return {
+        "ticket_id": ticket.id,
+        "event_title": event.title if event else None,
+        "venue": event.venue if event else None,
+        "event_date": event.event_date if event else None,
+        "tier_name": ticket.tier.tier_name if ticket.tier else None,
+        "seat_number": ticket.seat_number,
+        # No gate-scanner-assignment concept exists in this schema yet.
+        "gate_assignment": None,
+        "chain_status": "verified" if ticket.nft_token_id else "pending",
+        "nft_token_id": ticket.nft_token_id,
+        "nft_tx_hash": ticket.nft_tx_hash,
+        # Self-custody (claimTicket) isn't wired into the backend yet —
+        # always false/null here rather than faking a claim that never happened.
+        "self_custodied": False,
+        "wallet_address": None,
+    }
+
+
 @router.get("/{ticket_id}/seed", response_model=TicketSeedResponse)
 def get_ticket_seed(
     ticket_id: str,

@@ -264,6 +264,10 @@ class Ticket(Base):
     # Which gate device checked this ticket in, if any — populated once GateScanner
     # registration exists (Phase 2); left null in Phase 1.
     gate_scanner_id: Mapped[str | None] = mapped_column(ForeignKey("gate_scanners.id"))
+    # Set only for the 2nd+ ticket in a quantity>1 purchase — the 1st ticket is
+    # still linked the original way, via Payment.ticket_id. Lets one payment
+    # activate/mint every ticket it covers, not just the first.
+    group_payment_id: Mapped[str | None] = mapped_column(ForeignKey("payments.id"))
 
     status: Mapped[TicketStatus] = mapped_column(
         SAEnum(TicketStatus), default=TicketStatus.PENDING_PAYMENT
@@ -286,8 +290,15 @@ class Ticket(Base):
     owner: Mapped["User"] = relationship("User", back_populates="tickets")
     # A list, not a single object — a ticket gets one Payment for its original
     # purchase, then one more each time it's resold.
+    # foreign_keys is explicit because Payment.ticket_id -> tickets.id and
+    # tickets.group_payment_id -> payments.id form two distinct FK paths
+    # between these two tables — SQLAlchemy can't infer which one this
+    # relationship means without being told.
     payments: Mapped[list["Payment"]] = relationship(
-        "Payment", back_populates="ticket", order_by="Payment.initiated_at"
+        "Payment",
+        back_populates="ticket",
+        foreign_keys="Payment.ticket_id",
+        order_by="Payment.initiated_at",
     )
     barcodes: Mapped[list["Barcode"]] = relationship("Barcode", back_populates="ticket")
 
@@ -315,6 +326,10 @@ class Payment(Base):
     ticket_id: Mapped[str] = mapped_column(ForeignKey("tickets.id"), nullable=False)
     tier_id: Mapped[str | None] = mapped_column(ForeignKey("event_tiers.id"))
     user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
+    # How many tickets this single payment covers — 1 for a resale purchase
+    # or a normal single-ticket buy, >1 when bought together via /purchase's
+    # quantity field. amount_kes is the TOTAL for all of them, not per-ticket.
+    quantity: Mapped[int] = mapped_column(Integer, default=1)
 
     amount_kes: Mapped[float] = mapped_column(Float, nullable=False)
     status: Mapped[PaymentStatus] = mapped_column(
@@ -331,7 +346,7 @@ class Payment(Base):
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime)
     failure_reason: Mapped[str | None] = mapped_column(String(255))
 
-    ticket: Mapped["Ticket"] = relationship("Ticket", back_populates="payments")
+    ticket: Mapped["Ticket"] = relationship("Ticket", back_populates="payments", foreign_keys=[ticket_id])
     tier: Mapped["EventTier | None"] = relationship("EventTier", back_populates="payments")
     user: Mapped["User"] = relationship("User", back_populates="payments")
 
