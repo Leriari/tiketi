@@ -2,49 +2,86 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import jsQR from "jsqr";
 import { Wifi, WifiOff, CheckCircle2, XCircle, ChevronUp, Trash2, UploadCloud, KeyRound } from "lucide-react";
-import { api } from "../../api";
-import { useToast } from "../../components/ui/Toast";
+import { api, ApiError } from "../../api";
 import { Button, Input, Drawer, Badge } from "../../components/ui";
-import { loadSession, saveSession, scanOffline, markUploaded, clearSession } from "../../scanner/offlineStore";
+import { validate } from "../../scanner/validate";
+import {
+  getMeta, countCredentials, countPendingUpload, getAllAdmissions,
+  markAdmissionsUploaded, wipeAll,
+} from "../../scanner/credentialStore";
 
 const CHECKS = ["Signature verified", "Credential current", "Not previously used", "Correct gate"];
+const LOG_LIMIT = 12;
 
 export default function Scan() {
   const navigate = useNavigate();
-  const toast = useToast();
   const videoRef = useRef(null);
   const canvasRef = useRef(document.createElement("canvas"));
   const rafRef = useRef(null);
   const resultRef = useRef(null);
-  const sessionRef = useRef(null);
+  const processingRef = useRef(false);
   const uploadingRef = useRef(false);
 
-  const [session, setSession] = useState(() => loadSession());
+  const [meta, setMeta] = useState(() => getMeta());
+  const [credentialCount, setCredentialCount] = useState(0);
+  const [pendingUpload, setPendingUpload] = useState(0);
   const [cameraState, setCameraState] = useState("requesting"); // requesting | active | denied | unavailable
   const [manualCode, setManualCode] = useState("");
   const [result, setResult] = useState(null);
   const [online, setOnline] = useState(navigator.onLine);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [uploadBanner, setUploadBanner] = useState(null); // { phase: 'uploading'|'done', count }
+  const [stats, setStats] = useState({ scannedTotal: 0, admittedTotal: 0, deniedTotal: 0 });
+  const [log, setLog] = useState([]);
 
   useEffect(() => { resultRef.current = result; }, [result]);
-  useEffect(() => { sessionRef.current = session; }, [session]);
 
   useEffect(() => {
-    if (!session) navigate("/scanner", { replace: true });
-  }, [session, navigate]);
+    if (!meta) {
+      navigate("/scanner", { replace: true });
+      return;
+    }
+    (async () => {
+      setCredentialCount(await countCredentials());
+      setPendingUpload(await countPendingUpload());
+      // Admissions persist across reloads (IndexedDB) — admittedTotal picks
+      // up where this device left off. scanned/denied aren't persisted
+      // (no store for them; see credentialStore.js's module comment on
+      // scope), so they start at 0 each session.
+      const admittedSoFar = (await getAllAdmissions()).length;
+      setStats((s) => ({ ...s, admittedTotal: admittedSoFar }));
+    })();
+  }, [meta, navigate]);
 
-  const applyScan = useCallback((rawPayload) => {
-    if (resultRef.current || !sessionRef.current) return;
-    const { session: next, entry, granted, reason, tierName } = scanOffline(sessionRef.current, rawPayload);
-    saveSession(next);
-    setSession({ ...next });
-    setResult({ granted, reason, ticketId: entry.ticket_id, tierName, gateName: next.gateName, at: entry.scanned_at });
-    if (navigator.vibrate) navigator.vibrate(granted ? 200 : [200, 100, 200]);
-  }, []);
+  const applyScan = useCallback(async (rawPayload) => {
+    if (resultRef.current || processingRef.current || !meta) return;
+    processingRef.current = true;
+    try {
+      const verdict = await validate(rawPayload, { gateName: meta.gateName });
+      const entry = {
+        ticketId: verdict.ticketId || null,
+        tierName: verdict.tierName || null,
+        granted: verdict.granted,
+        reason: verdict.reason || null,
+        at: verdict.scannedAt || new Date().toISOString(),
+      };
+      setResult({ granted: verdict.granted, reason: verdict.reason, ticketId: entry.ticketId, tierName: entry.tierName, gateName: meta.gateName, at: entry.at });
+      setLog((l) => [entry, ...l].slice(0, LOG_LIMIT));
+      setStats((s) => ({
+        scannedTotal: s.scannedTotal + 1,
+        admittedTotal: s.admittedTotal + (verdict.granted ? 1 : 0),
+        deniedTotal: s.deniedTotal + (verdict.granted ? 0 : 1),
+      }));
+      if (verdict.granted) setPendingUpload((p) => p + 1);
+      if (navigator.vibrate) navigator.vibrate(verdict.granted ? 200 : [200, 100, 200]);
+    } finally {
+      processingRef.current = false;
+    }
+  }, [meta]);
 
   // Camera viewfinder — spec §6.2. Falls back to manual entry if unavailable;
-  // scanning runs entirely against the local cache (applyScan), no network.
+  // scanning runs entirely against the local cache (applyScan -> validate.js
+  // -> credentialStore.js), no network.
   useEffect(() => {
     let stream;
     let cancelled = false;
@@ -67,7 +104,7 @@ export default function Scan() {
     function tick() {
       rafRef.current = requestAnimationFrame(tick);
       const video = videoRef.current;
-      if (!video || video.readyState !== video.HAVE_ENOUGH_DATA || resultRef.current) return;
+      if (!video || video.readyState !== video.HAVE_ENOUGH_DATA || resultRef.current || processingRef.current) return;
       const canvas = canvasRef.current;
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
@@ -95,27 +132,38 @@ export default function Scan() {
   }, [result]);
 
   const uploadPending = useCallback(async () => {
-    const current = sessionRef.current;
-    if (!current || current.pending.length === 0 || !navigator.onLine || uploadingRef.current) return;
+    if (!meta || !navigator.onLine || uploadingRef.current) return;
+    const admissions = (await getAllAdmissions()).filter((a) => !a.uploaded);
+    if (admissions.length === 0) return;
     uploadingRef.current = true;
-    const count = current.pending.length;
-    setUploadBanner({ phase: "uploading", count });
+    setUploadBanner({ phase: "uploading", count: admissions.length });
     try {
-      await api.reportScanBatch({ eventId: current.eventId, gateId: current.gateId, scannerId: current.scannerId, scans: current.pending });
-      const next = markUploaded({ ...current, pending: [...current.pending] });
-      saveSession(next);
-      setSession(next);
-      setUploadBanner({ phase: "done", count });
+      await api.reportScanBatch({
+        eventId: meta.eventId,
+        gateId: meta.scannerId,
+        scannerId: meta.deviceId,
+        scans: admissions.map((a) => ({ ticket_id: a.ticket_id, scanned_at: a.scanned_at })),
+      });
+      await markAdmissionsUploaded(admissions.map((a) => a.ticket_id));
+      setPendingUpload(await countPendingUpload());
+      setUploadBanner({ phase: "done", count: admissions.length });
       setTimeout(() => setUploadBanner(null), 2000);
-    } catch {
+    } catch (err) {
+      // reportScanBatch has no real backend yet (Block B) — this is
+      // expected to fail today. Say so plainly rather than hanging on a
+      // spinner or silently discarding the attempt; nothing is lost, the
+      // admissions stay queued (uploaded: false) for when it's wired.
       setUploadBanner(null);
+      if (!(err instanceof ApiError && err.status === 501)) {
+        console.error("Scan batch upload failed:", err);
+      }
     } finally {
       uploadingRef.current = false;
     }
-  }, []);
+  }, [meta]);
 
   useEffect(() => {
-    function goOnline() { setOnline(true); uploadPending(); }
+    function goOnline() { setOnline(true); }
     function goOffline() { setOnline(false); }
     window.addEventListener("online", goOnline);
     window.addEventListener("offline", goOffline);
@@ -123,17 +171,7 @@ export default function Scan() {
       window.removeEventListener("online", goOnline);
       window.removeEventListener("offline", goOffline);
     };
-  }, [uploadPending]);
-
-  // A gate stays connected to WiFi/LTE for the whole event in the common
-  // case — reconcile periodically whenever online, not only on the
-  // offline→online transition edge (that alone would strand pending scans
-  // for a device that was never actually disconnected).
-  useEffect(() => {
-    uploadPending();
-    const id = setInterval(uploadPending, 5000);
-    return () => clearInterval(id);
-  }, [uploadPending]);
+  }, []);
 
   function manualSubmit(e) {
     e.preventDefault();
@@ -142,22 +180,22 @@ export default function Scan() {
     setManualCode("");
   }
 
-  function endSession() {
+  async function endSession() {
     if (!window.confirm("Clear cached credentials from this device? You'll need to sync again before scanning.")) return;
-    clearSession();
+    await wipeAll();
     navigate("/scanner", { replace: true });
   }
 
-  if (!session) return null;
+  if (!meta) return null;
 
   return (
     <div className="min-h-screen flex flex-col bg-surface-base">
-      <h1 className="sr-only">Live QR Scanner — {session.gateName}</h1>
+      <h1 className="sr-only">Live QR Scanner — {meta.gateName}</h1>
       {/* Persistent header — spec §6.2 */}
       <div className="flex-none flex items-center justify-between px-4 h-16 border-b border-line-subtle">
         <div>
-          <p className="text-body font-semibold text-ink-primary">{session.gateName}</p>
-          <p className="text-caption text-ink-tertiary tabular-nums">{session.admittedTotal} admitted</p>
+          <p className="text-body font-semibold text-ink-primary">{meta.gateName}</p>
+          <p className="text-caption text-ink-tertiary tabular-nums">{stats.admittedTotal} admitted</p>
         </div>
         <span
           className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1.5 text-caption font-semibold ${online ? "bg-info-bg text-info-on-tint" : "bg-success-bg text-success-on-tint"}`}
@@ -205,7 +243,7 @@ export default function Scan() {
           onClick={() => setDrawerOpen(true)}
           className="mt-4 flex items-center justify-center gap-1.5 text-body-sm font-semibold text-ink-secondary min-h-[48px]"
         >
-          <ChevronUp size={16} /> Session — {session.scannedTotal} scanned, {session.pending.length} pending upload
+          <ChevronUp size={16} /> Session — {stats.scannedTotal} scanned, {pendingUpload} pending upload
         </button>
       </div>
 
@@ -244,36 +282,38 @@ export default function Scan() {
         <div className="flex flex-col gap-4">
           <div className="grid grid-cols-3 gap-3 text-center">
             <div>
-              <p className="text-metric font-bold text-ink-primary tabular-nums">{session.scannedTotal}</p>
+              <p className="text-metric font-bold text-ink-primary tabular-nums">{stats.scannedTotal}</p>
               <p className="text-caption text-ink-tertiary">Scanned</p>
             </div>
             <div>
-              <p className="text-metric font-bold text-success tabular-nums">{session.admittedTotal}</p>
+              <p className="text-metric font-bold text-success tabular-nums">{stats.admittedTotal}</p>
               <p className="text-caption text-ink-tertiary">Admitted</p>
             </div>
             <div>
-              <p className="text-metric font-bold text-danger tabular-nums">{session.deniedTotal}</p>
+              <p className="text-metric font-bold text-danger tabular-nums">{stats.deniedTotal}</p>
               <p className="text-caption text-ink-tertiary">Denied</p>
             </div>
           </div>
 
+          <p className="text-caption text-ink-tertiary text-center">{credentialCount} credentials cached on this device</p>
+
           <div className="flex items-center justify-between rounded-md border border-line-default px-3 py-2.5">
-            <span className="text-body-sm text-ink-secondary">{session.pending.length} pending upload{session.pending.length === 1 ? "" : "s"} · {session.uploadedCount} uploaded</span>
+            <span className="text-body-sm text-ink-secondary">{pendingUpload} pending upload{pendingUpload === 1 ? "" : "s"}</span>
             <Badge tone={online ? "info" : "warning"}>{online ? "Online" : "Offline"}</Badge>
           </div>
 
-          {session.pending.length > 0 && (
+          {pendingUpload > 0 && (
             <Button variant="secondary" iconLeft={<UploadCloud size={15} />} onClick={uploadPending} disabled={!online}>
               {online ? "Upload now" : "Upload unavailable offline"}
             </Button>
           )}
 
-          {session.log.length > 0 && (
+          {log.length > 0 && (
             <div className="flex flex-col gap-1.5 max-h-48 overflow-y-auto">
-              {session.log.map((r, i) => (
+              {log.map((r, i) => (
                 <div key={i} className="flex items-center justify-between text-body-sm">
-                  <span className={r.result === "granted" ? "text-success font-medium" : "text-danger font-medium"}>{r.result === "granted" ? "Granted" : "Denied"}</span>
-                  <span className="text-caption text-ink-tertiary tabular-nums">{new Date(r.scanned_at).toLocaleTimeString("en-KE", { hour: "2-digit", minute: "2-digit" })}</span>
+                  <span className={r.granted ? "text-success font-medium" : "text-danger font-medium"}>{r.granted ? "Granted" : "Denied"}</span>
+                  <span className="text-caption text-ink-tertiary tabular-nums">{new Date(r.at).toLocaleTimeString("en-KE", { hour: "2-digit", minute: "2-digit" })}</span>
                 </div>
               ))}
             </div>

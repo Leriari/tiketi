@@ -137,9 +137,12 @@ export const liveApi = {
   getRoyaltyLedger: notImplemented("getRoyaltyLedger"),
   getResaleCompliance: notImplemented("getResaleCompliance"),
 
-  // Scanner PWA (spec.md §6) — offline gate validation needs a real pre-event
-  // sync/reconciliation pair on the backend; doesn't exist yet.
-  syncGateData: notImplemented("syncGateData"),
+  // Scanner PWA (spec.md §6 / Work Order 03) — syncGateData is real: it's
+  // the one network call the whole offline-validation design allows (pulls
+  // credentials in, before doors open). reportScanBatch stays a stub —
+  // uploading scan results back is Block B, not built yet.
+  syncGateData: ({ eventId, deviceId, gateName }) =>
+    request(`/gate/sync-event/${eventId}?device_id=${encodeURIComponent(deviceId)}&gate_name=${encodeURIComponent(gateName)}`),
   reportScanBatch: notImplemented("reportScanBatch"),
 
   // Platform Admin (spec.md §7) — no backend yet; needs a real multi-tenant

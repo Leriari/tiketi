@@ -3,15 +3,20 @@ import { useNavigate } from "react-router-dom";
 import { ScanLine, HardDrive, Clock, CalendarRange } from "lucide-react";
 import { api, ApiError } from "../../api";
 import { useToast } from "../../components/ui/Toast";
-import { Chip, Button, ProgressBar, EmptyState, ErrorState, Skeleton } from "../../components/ui";
-import { loadSession, saveSession, newSessionFromSync, estimatedStorageKb, clearSession } from "../../scanner/offlineStore";
+import { Input, Button, ProgressBar, EmptyState, ErrorState, Skeleton } from "../../components/ui";
+import {
+  getMeta, setMeta, getOrCreateDeviceId, countCredentials,
+  replaceCredentials, wipeAll, maybeAutoWipe,
+} from "../../scanner/credentialStore";
 
-function formatWindow(startsAt, endsAt) {
-  const start = new Date(startsAt).toLocaleString("en-KE", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
-  if (!endsAt) return start;
-  const end = new Date(endsAt).toLocaleString("en-KE", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
-  return `${start} — ${end}`;
+function formatWhen(iso) {
+  return new Date(iso).toLocaleString("en-KE", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
 }
+
+// Rough display estimate only (bytes per cached credential record) — not a
+// precision measurement, just enough for a steward to see "this used some
+// real storage," matching what the old localStorage version showed.
+const BYTES_PER_CREDENTIAL_ESTIMATE = 160;
 
 export default function Sync() {
   const navigate = useNavigate();
@@ -19,12 +24,13 @@ export default function Sync() {
   const [events, setEvents] = useState(null);
   const [eventsError, setEventsError] = useState(null);
   const [eventId, setEventId] = useState("");
-  const [gateId, setGateId] = useState("");
+  const [gateName, setGateName] = useState("");
   const [progress, setProgress] = useState(0);
-  const [session, setSession] = useState(() => loadSession());
+  const [meta, setMetaState] = useState(null);
+  const [credentialCount, setCredentialCount] = useState(0);
   // resume: an existing device session was found on load | select: choosing
   // event+gate | syncing | synced: just finished, ready to start scanning.
-  const [phase, setPhase] = useState(() => (loadSession() ? "resume" : "select"));
+  const [phase, setPhase] = useState("loading");
   const timerRef = useRef(null);
 
   function loadEvents() {
@@ -34,6 +40,18 @@ export default function Sync() {
 
   useEffect(() => {
     loadEvents();
+    (async () => {
+      const wiped = await maybeAutoWipe();
+      if (wiped) {
+        setPhase("select");
+        return;
+      }
+      const existing = getMeta();
+      const count = await countCredentials();
+      setMetaState(existing);
+      setCredentialCount(count);
+      setPhase(existing && count > 0 ? "resume" : "select");
+    })();
     return () => clearInterval(timerRef.current);
   }, []);
 
@@ -44,9 +62,10 @@ export default function Sync() {
     setPhase("syncing");
     setProgress(0);
 
-    const syncPromise = api.syncGateData({ eventId, gateId });
-    // Visual progress independent of the (near-instant) mock request — a real
-    // device syncing thousands of credentials genuinely takes a few seconds.
+    const deviceId = getOrCreateDeviceId();
+    const syncPromise = api.syncGateData({ eventId, deviceId, gateName });
+    // Visual progress independent of the request itself — a real device
+    // syncing thousands of credentials genuinely takes a few seconds.
     timerRef.current = setInterval(() => {
       setProgress((p) => Math.min(p + Math.random() * 18, 92));
     }, 140);
@@ -56,9 +75,19 @@ export default function Sync() {
       clearInterval(timerRef.current);
       setProgress(100);
 
-      const next = newSessionFromSync(eventId, gateId, sync);
-      saveSession(next);
-      setSession(next);
+      await replaceCredentials(sync.tickets);
+      const nextMeta = setMeta({
+        eventId: sync.event_id,
+        eventTitle: sync.event_title,
+        eventDate: sync.event_date,
+        gateName: sync.gate_name,
+        scannerId: sync.scanner_id,
+        deviceId: sync.device_id,
+        syncedAt: sync.synced_at,
+        totalCached: sync.ticket_count,
+      });
+      setMetaState(nextMeta);
+      setCredentialCount(sync.ticket_count);
       setPhase("synced");
     } catch (err) {
       clearInterval(timerRef.current);
@@ -67,11 +96,12 @@ export default function Sync() {
     }
   }
 
-  function startNewSession() {
-    clearSession();
-    setSession(null);
+  async function startNewSession() {
+    await wipeAll();
+    setMetaState(null);
+    setCredentialCount(0);
     setEventId("");
-    setGateId("");
+    setGateName("");
     setProgress(0);
     setPhase("select");
   }
@@ -84,10 +114,14 @@ export default function Sync() {
       </div>
       <p className="text-body-sm text-ink-tertiary mb-8">Sync an event to this device before gates open.</p>
 
-      {phase === "resume" && session && (
+      {phase === "loading" && (
+        <div className="flex flex-col gap-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}</div>
+      )}
+
+      {phase === "resume" && meta && (
         <div className="rounded-md border border-line-default bg-surface p-4 flex flex-col gap-3">
           <p className="text-body-sm text-ink-primary">
-            <span className="font-semibold">{session.eventTitle}</span> · {session.gateName} is already synced to this device.
+            <span className="font-semibold">{meta.eventTitle}</span> · {meta.gateName} is already synced to this device.
           </p>
           <div className="flex gap-2">
             <Button onClick={() => navigate("/scanner/scan")} className="flex-1">Resume Scanning</Button>
@@ -114,7 +148,7 @@ export default function Sync() {
                       key={e.id}
                       type="button"
                       disabled={phase === "syncing"}
-                      onClick={() => { setEventId(e.id); setGateId(""); }}
+                      onClick={() => setEventId(e.id)}
                       className={`text-left rounded-md border px-4 py-3 min-h-[48px] transition-colors ${eventId === e.id ? "border-brand-primary bg-brand-primary/10" : "border-line-default bg-surface"}`}
                     >
                       <p className="text-body font-semibold text-ink-primary">{e.title}</p>
@@ -126,17 +160,20 @@ export default function Sync() {
 
               {event && (
                 <div>
-                  <p className="text-label uppercase tracking-[0.06em] text-ink-tertiary font-medium mb-2">Gate</p>
-                  <div className="flex flex-wrap gap-2">
-                    {(event.gates || []).map((g) => (
-                      <Chip key={g.id} selected={gateId === g.id} onClick={() => phase !== "syncing" && setGateId(g.id)}>{g.name}</Chip>
-                    ))}
-                    {(!event.gates || event.gates.length === 0) && <p className="text-body-sm text-ink-tertiary">This event has no gates configured yet.</p>}
-                  </div>
+                  <p className="text-label uppercase tracking-[0.06em] text-ink-tertiary font-medium mb-2">Gate name</p>
+                  <Input
+                    placeholder="e.g. Main Gate"
+                    value={gateName}
+                    onChange={(e2) => setGateName(e2.target.value)}
+                    disabled={phase === "syncing"}
+                  />
+                  <p className="text-caption text-ink-tertiary mt-1.5">
+                    This device will be registered under that name for this event.
+                  </p>
                 </div>
               )}
 
-              {gateId && phase === "select" && (
+              {event && gateName.trim() && phase === "select" && (
                 <Button size="lg" iconLeft={<ScanLine size={18} />} onClick={startSync}>Sync tickets to this device</Button>
               )}
 
@@ -153,17 +190,18 @@ export default function Sync() {
         </>
       )}
 
-      {phase === "synced" && session && (
+      {phase === "synced" && meta && (
         <div className="flex flex-col gap-3">
           <div className="rounded-md border border-line-default bg-surface p-4 flex flex-col gap-2.5">
             <div className="flex items-center gap-2 text-body-sm text-ink-secondary">
               <Clock size={14} className="text-ink-tertiary flex-none" /> Last sync: just now
             </div>
             <div className="flex items-center gap-2 text-body-sm text-ink-secondary">
-              <HardDrive size={14} className="text-ink-tertiary flex-none" /> Storage used: ~{estimatedStorageKb(session)} KB · {session.totalCached} tickets
+              <HardDrive size={14} className="text-ink-tertiary flex-none" />
+              Storage used: ~{Math.max(1, Math.round((credentialCount * BYTES_PER_CREDENTIAL_ESTIMATE) / 1024))} KB · {credentialCount} tickets
             </div>
             <div className="flex items-center gap-2 text-body-sm text-ink-secondary">
-              <CalendarRange size={14} className="text-ink-tertiary flex-none" /> Access window: {formatWindow(session.eventDate, session.endsAt)}
+              <CalendarRange size={14} className="text-ink-tertiary flex-none" /> Event date: {formatWhen(meta.eventDate)}
             </div>
           </div>
 
