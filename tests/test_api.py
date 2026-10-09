@@ -384,16 +384,20 @@ def test_can_purchase_same_event_more_than_once(auth_headers, test_event, monkey
     assert len(res.json()) == before_count + 1
 
 
-# ── Gate Sync Auth Tests ───────────────────────────────────────────────────────
+# ── Gate Sync Auth Tests (Work Order 03) ────────────────────────────────────────
+
+def _sync_params():
+    return {"device_id": "test-device-001", "gate_name": "Main Gate"}
+
 
 def test_sync_event_requires_auth(test_event):
-    res = client.get(f"/api/v1/gate/sync-event/{test_event['id']}")
+    res = client.get(f"/api/v1/gate/sync-event/{test_event['id']}", params=_sync_params())
     assert res.status_code == 403
 
 
 def test_sync_event_forbidden_for_unrelated_user(test_event):
-    """An authenticated user with no organizer-member or gate-scanner link to
-    this event must not be able to pull ticket secrets for it."""
+    """An authenticated user who did not create this event must not be able
+    to pull ticket secrets for it — only the event's creator can."""
     phone = "0733000099"
     res = client.post("/api/v1/auth/request-otp", json={"phone_number": phone})
     otp = res.json()["dev_otp"]
@@ -402,38 +406,59 @@ def test_sync_event_forbidden_for_unrelated_user(test_event):
 
     res = client.get(
         f"/api/v1/gate/sync-event/{test_event['id']}",
+        params=_sync_params(),
         headers={"Authorization": f"Bearer {token}"},
     )
     assert res.status_code == 403
 
 
-def test_sync_event_allowed_for_registered_scanner(test_event):
-    """A user linked to a GateScanner device registered for this event can sync."""
+def test_sync_event_allowed_for_event_creator(auth_headers, test_event):
+    """The event's creator can sync, and a GateScanner device is
+    auto-registered for them (Work Order 03 — no pre-registration route
+    exists; sync-event itself registers the device on first call)."""
     from app.models.models import GateScanner
-
-    phone = "0733000098"
-    res = client.post("/api/v1/auth/request-otp", json={"phone_number": phone})
-    otp = res.json()["dev_otp"]
-    res = client.post("/api/v1/auth/verify-otp", json={"phone_number": phone, "otp_code": otp})
-    token = res.json()["access_token"]
-    res = client.get("/api/v1/auth/me", headers={"Authorization": f"Bearer {token}"})
-    user_id = res.json()["id"]
-
-    db = TestingSessionLocal()
-    db.add(GateScanner(
-        event_id=test_event["id"],
-        account_id=user_id,
-        gate_name="Main Gate",
-        device_id="test-device-001",
-    ))
-    db.commit()
-    db.close()
 
     res = client.get(
         f"/api/v1/gate/sync-event/{test_event['id']}",
-        headers={"Authorization": f"Bearer {token}"},
+        params=_sync_params(),
+        headers=auth_headers,
     )
-    assert res.status_code == 200
+    assert res.status_code == 200, res.text
     data = res.json()
     assert data["event_id"] == test_event["id"]
+    assert data["gate_name"] == "Main Gate"
     assert isinstance(data["tickets"], list)
+
+    db = TestingSessionLocal()
+    scanner = db.query(GateScanner).filter(GateScanner.device_id == "test-device-001").first()
+    assert scanner is not None
+    assert scanner.event_id == test_event["id"]
+    assert scanner.last_sync_at is not None
+    db.close()
+
+
+def test_sync_event_device_reregisters_for_a_different_event(auth_headers, test_event):
+    """The same physical device_id syncing a second, different event
+    re-points its GateScanner row rather than violating the unique
+    constraint on device_id."""
+    from app.models.models import GateScanner
+
+    res = client.post("/api/v1/events/", json={
+        "title": "Second Event For Device Reuse",
+        "venue": "Test Venue",
+        "event_date": "2027-02-01T18:00:00",
+        "organizer_phone": "0700000000",
+        "ticket_price_kes": 100,
+        "total_capacity": 10,
+    }, headers=auth_headers)
+    second_event = res.json()
+
+    client.get(f"/api/v1/gate/sync-event/{test_event['id']}", params=_sync_params(), headers=auth_headers)
+    res = client.get(f"/api/v1/gate/sync-event/{second_event['id']}", params=_sync_params(), headers=auth_headers)
+    assert res.status_code == 200, res.text
+
+    db = TestingSessionLocal()
+    scanners = db.query(GateScanner).filter(GateScanner.device_id == "test-device-001").all()
+    assert len(scanners) == 1
+    assert scanners[0].event_id == second_event["id"]
+    db.close()

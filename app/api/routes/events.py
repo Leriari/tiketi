@@ -32,6 +32,7 @@ def create_event(
         organizer_phone=body.organizer_phone,
         total_capacity=body.total_capacity,
         status=EventStatus.PUBLISHED,
+        created_by_user_id=current_user.id,
     )
     db.add(event)
     db.flush()  # get event.id without committing

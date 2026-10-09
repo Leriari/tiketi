@@ -177,6 +177,12 @@ class Event(Base):
     # Nullable until Phase 2 builds real organizer registration/auth — organizer_phone
     # remains the practical contact field for now.
     organizer_id: Mapped[str | None] = mapped_column(ForeignKey("organizers.id"))
+    # The user account that created this event — the only honest signal of
+    # "who owns this event" that exists today (Organizer/OrganizerMember are
+    # unwired). Nullable because events created before this column existed
+    # have no creator on record; they are simply not gate-manageable by
+    # anyone until recreated (Work Order 03).
+    created_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
 
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str | None] = mapped_column(Text)

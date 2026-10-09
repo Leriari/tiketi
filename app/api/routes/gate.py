@@ -14,7 +14,7 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models.models import Ticket, TicketStatus, Event, GateScanner, OrganizerMember, AuditLog, User
+from app.models.models import Ticket, TicketStatus, Event, GateScanner, GateScannerStatus, AuditLog, User
 from app.core.dependencies import get_current_user
 
 router = APIRouter(prefix="/gate", tags=["Gate Validation"])
@@ -90,42 +90,53 @@ def scan_ticket(body: ScanRequest, db: Session = Depends(get_db)):
 @router.get("/sync-event/{event_id}")
 def sync_event_tickets(
     event_id: str,
+    device_id: str,
+    gate_name: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
-    Pre-event sync endpoint.
-    The local mesh server calls this once before the event starts
-    to download all active ticket IDs + TOTP secrets for offline validation.
+    Pre-event sync endpoint (Work Order 03). A scanning device calls this
+    once before doors open to download every active ticket's TOTP secret
+    for fully offline validation — see docs/offline-validation.md.
 
-    Restricted to: a member of the event's organizer, or an account linked
-    to a registered GateScanner device for this event.
+    Restricted to the event's creator (Event.created_by_user_id) — the only
+    honest signal of "who owns this event" that exists in this schema; the
+    full Organizer/OrganizerMember business-account model stays unwired.
+
+    Registers (or re-registers, if device_id already exists — the same
+    physical device used for a different event later) a GateScanner row for
+    this device, then returns the sync payload. No per-ticket gate
+    assignment exists yet, so every device registered for an event receives
+    the same full set of that event's active tickets — this endpoint
+    authorizes a *device*, not yet a specific *gate* partition.
     """
     event = db.query(Event).filter(Event.id == event_id).first()
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
 
-    is_organizer_member = (
-        event.organizer_id is not None
-        and db.query(OrganizerMember)
-        .filter(
-            OrganizerMember.organizer_id == event.organizer_id,
-            OrganizerMember.account_id == current_user.id,
-        )
-        .first()
-        is not None
-    )
-    is_registered_scanner = (
-        db.query(GateScanner)
-        .filter(
-            GateScanner.event_id == event_id,
-            GateScanner.account_id == current_user.id,
-        )
-        .first()
-        is not None
-    )
-    if not (is_organizer_member or is_registered_scanner):
+    if event.created_by_user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not authorised to sync this event")
+
+    gate_scanner = db.query(GateScanner).filter(GateScanner.device_id == device_id).first()
+    if gate_scanner:
+        gate_scanner.event_id = event.id
+        gate_scanner.account_id = current_user.id
+        gate_scanner.gate_name = gate_name
+        gate_scanner.status = GateScannerStatus.ACTIVE
+    else:
+        gate_scanner = GateScanner(
+            event_id=event.id,
+            account_id=current_user.id,
+            gate_name=gate_name,
+            device_id=device_id,
+            status=GateScannerStatus.ACTIVE,
+        )
+        db.add(gate_scanner)
+    db.flush()
+
+    now = datetime.now(timezone.utc)
+    gate_scanner.last_sync_at = now
 
     tickets = (
         db.query(Ticket)
@@ -144,13 +155,24 @@ def sync_event_tickets(
     ))
     db.commit()
 
-    # Return minimal data — only what the gate needs
     return {
         "event_id": event_id,
+        "event_title": event.title,
+        "event_date": event.event_date.isoformat(),
+        "gate_name": gate_scanner.gate_name,
+        "scanner_id": gate_scanner.id,
+        "device_id": gate_scanner.device_id,
+        "synced_at": now.isoformat(),
         "ticket_count": len(tickets),
         "tickets": [
-            {"id": t.id, "totp_secret": t.totp_secret}
+            {
+                "id": t.id,
+                "tier_name": t.tier.tier_name if t.tier else None,
+                "seat_number": t.seat_number,
+                "gate_assignment": None,
+                "totp_secret": t.totp_secret,
+                "status": t.status.value,
+            }
             for t in tickets
         ],
-        "synced_at": datetime.now(timezone.utc).isoformat(),
     }
