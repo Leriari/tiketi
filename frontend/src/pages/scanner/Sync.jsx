@@ -1,13 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ScanLine, HardDrive, Clock, CalendarRange } from "lucide-react";
+import { ScanLine, HardDrive, Clock, CalendarRange, KeyRound, Smartphone } from "lucide-react";
 import { api, ApiError } from "../../api";
 import { useToast } from "../../components/ui/Toast";
-import { Input, Button, ProgressBar, EmptyState, ErrorState, Skeleton } from "../../components/ui";
+import { Input, Button, ProgressBar, ErrorState, Skeleton } from "../../components/ui";
 import {
   getMeta, setMeta, getOrCreateDeviceId, countCredentials,
   replaceCredentials, wipeAll, maybeAutoWipe,
 } from "../../scanner/credentialStore";
+import { getDeviceInfo, setDeviceInfo, clearDeviceInfo } from "../../scanner/deviceAuth";
 
 function formatWhen(iso) {
   return new Date(iso).toLocaleString("en-KE", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
@@ -21,49 +22,69 @@ const BYTES_PER_CREDENTIAL_ESTIMATE = 160;
 export default function Sync() {
   const navigate = useNavigate();
   const toast = useToast();
-  const [events, setEvents] = useState(null);
-  const [eventsError, setEventsError] = useState(null);
-  const [eventId, setEventId] = useState("");
-  const [gateName, setGateName] = useState("");
+  const [device, setDevice] = useState(() => getDeviceInfo());
+  const [enrollCode, setEnrollCode] = useState("");
+  const [enrolling, setEnrolling] = useState(false);
+  const [enrollError, setEnrollError] = useState(null);
   const [progress, setProgress] = useState(0);
   const [meta, setMetaState] = useState(null);
   const [credentialCount, setCredentialCount] = useState(0);
-  // resume: an existing device session was found on load | select: choosing
-  // event+gate | syncing | synced: just finished, ready to start scanning.
+  // loading: checking device-enrolment + cached-credential state on mount.
+  // enroll: no device token yet — this device must redeem an enrolment
+  //   code (Work Order 04 C3) before anything else is reachable.
+  // resume: an existing session was found on load | ready: enrolled, no
+  //   credentials cached yet | syncing | synced.
   const [phase, setPhase] = useState("loading");
   const timerRef = useRef(null);
 
-  function loadEvents() {
-    setEventsError(null);
-    api.listEvents().then(setEvents).catch((err) => setEventsError(err instanceof ApiError ? err.message : "Something went wrong. Please try again."));
-  }
-
   useEffect(() => {
-    loadEvents();
     (async () => {
       const wiped = await maybeAutoWipe();
-      if (wiped) {
-        setPhase("select");
-        return;
-      }
-      const existing = getMeta();
-      const count = await countCredentials();
+      const existing = wiped ? null : getMeta();
+      const count = wiped ? 0 : await countCredentials();
       setMetaState(existing);
       setCredentialCount(count);
-      setPhase(existing && count > 0 ? "resume" : "select");
+
+      if (!device) {
+        setPhase("enroll");
+      } else if (existing && count > 0) {
+        setPhase("resume");
+      } else {
+        setPhase("ready");
+      }
     })();
     return () => clearInterval(timerRef.current);
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- device read once on mount, re-read explicitly after enrol
 
-  const event = events?.find((e) => e.id === eventId);
-  const eventTicketCount = event?.tiers?.reduce((s, t) => s + t.tickets_sold, 0) || 0;
+  async function submitEnrollCode(e) {
+    e.preventDefault();
+    if (!enrollCode.trim()) return;
+    setEnrolling(true);
+    setEnrollError(null);
+    try {
+      const deviceId = getOrCreateDeviceId();
+      const res = await api.enrollScanner({ enrollmentCode: enrollCode.trim().toUpperCase(), deviceId });
+      const info = setDeviceInfo({
+        deviceToken: res.device_token,
+        scannerId: res.scanner_id,
+        eventId: res.event_id,
+        eventTitle: res.event_title,
+        gateName: res.gate_name,
+      });
+      setDevice(info);
+      setPhase("ready");
+    } catch (err) {
+      setEnrollError(err instanceof ApiError ? err.message : "Enrolment failed. Check the code and try again.");
+    } finally {
+      setEnrolling(false);
+    }
+  }
 
   async function startSync() {
     setPhase("syncing");
     setProgress(0);
 
-    const deviceId = getOrCreateDeviceId();
-    const syncPromise = api.syncGateData({ eventId, deviceId, gateName });
+    const syncPromise = api.syncGateData({ eventId: device.eventId });
     // Visual progress independent of the request itself — a real device
     // syncing thousands of credentials genuinely takes a few seconds.
     timerRef.current = setInterval(() => {
@@ -92,7 +113,7 @@ export default function Sync() {
     } catch (err) {
       clearInterval(timerRef.current);
       toast.push(err instanceof ApiError ? err.message : "Sync failed. Please try again.", { tone: "danger" });
-      setPhase("select");
+      setPhase("ready");
     }
   }
 
@@ -100,10 +121,15 @@ export default function Sync() {
     await wipeAll();
     setMetaState(null);
     setCredentialCount(0);
-    setEventId("");
-    setGateName("");
     setProgress(0);
-    setPhase("select");
+    setPhase("ready");
+  }
+
+  function unenrollDevice() {
+    if (!window.confirm("Remove this device's enrolment? You'll need a new enrolment code to sync again.")) return;
+    clearDeviceInfo();
+    setDevice(null);
+    setPhase("enroll");
   }
 
   return (
@@ -112,13 +138,37 @@ export default function Sync() {
         <span className="h-9 w-9 rounded-md bg-brand-accent flex items-center justify-center text-brand-accent-ink font-black flex-none">C</span>
         <h1 className="text-h2 text-ink-primary font-bold">Scanner</h1>
       </div>
-      <p className="text-body-sm text-ink-tertiary mb-8">Sync an event to this device before gates open.</p>
+      <p className="text-body-sm text-ink-tertiary mb-8">
+        {phase === "enroll" ? "Enter this device's one-time enrolment code." : "Sync this device's gate before doors open."}
+      </p>
 
       {phase === "loading" && (
         <div className="flex flex-col gap-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}</div>
       )}
 
-      {phase === "resume" && meta && (
+      {phase === "enroll" && (
+        <form onSubmit={submitEnrollCode} className="flex flex-col gap-4">
+          <div className="rounded-md border border-line-default bg-surface p-4 flex items-center gap-3">
+            <Smartphone size={18} className="text-ink-tertiary flex-none" />
+            <p className="text-body-sm text-ink-secondary">
+              An organiser registers this device for one event and gate, then gives you a code to enter here.
+            </p>
+          </div>
+          <Input
+            leadingIcon={<KeyRound size={15} />}
+            placeholder="Enrolment code"
+            value={enrollCode}
+            onChange={(e) => setEnrollCode(e.target.value)}
+            error={enrollError}
+            disabled={enrolling}
+          />
+          <Button type="submit" size="lg" disabled={!enrollCode.trim() || enrolling}>
+            {enrolling ? "Enrolling…" : "Enrol this device"}
+          </Button>
+        </form>
+      )}
+
+      {phase === "resume" && meta && device && (
         <div className="rounded-md border border-line-default bg-surface p-4 flex flex-col gap-3">
           <p className="text-body-sm text-ink-primary">
             <span className="font-semibold">{meta.eventTitle}</span> · {meta.gateName} is already synced to this device.
@@ -130,64 +180,31 @@ export default function Sync() {
         </div>
       )}
 
-      {(phase === "select" || phase === "syncing") && (
-        <>
-          {eventsError ? (
-            <ErrorState description={eventsError} onRetry={loadEvents} />
-          ) : events === null ? (
-            <div className="flex flex-col gap-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}</div>
-          ) : events.length === 0 ? (
-            <EmptyState title="No live events" description="Nothing is available to scan right now." />
-          ) : (
-            <div className="flex flex-col gap-6">
-              <div>
-                <p className="text-label uppercase tracking-[0.06em] text-ink-tertiary font-medium mb-2">Event</p>
-                <div className="flex flex-col gap-2">
-                  {events.map((e) => (
-                    <button
-                      key={e.id}
-                      type="button"
-                      disabled={phase === "syncing"}
-                      onClick={() => setEventId(e.id)}
-                      className={`text-left rounded-md border px-4 py-3 min-h-[48px] transition-colors ${eventId === e.id ? "border-brand-primary bg-brand-primary/10" : "border-line-default bg-surface"}`}
-                    >
-                      <p className="text-body font-semibold text-ink-primary">{e.title}</p>
-                      <p className="text-caption text-ink-tertiary">{e.venue}</p>
-                    </button>
-                  ))}
-                </div>
-              </div>
+      {(phase === "ready" || phase === "syncing") && device && (
+        <div className="flex flex-col gap-6">
+          <div className="rounded-md border border-line-default bg-surface p-4 flex flex-col gap-2.5">
+            <p className="text-label uppercase tracking-[0.06em] text-ink-tertiary font-medium">This device is enrolled for</p>
+            <p className="text-body font-semibold text-ink-primary">{device.eventTitle}</p>
+            <p className="text-caption text-ink-tertiary">{device.gateName}</p>
+          </div>
 
-              {event && (
-                <div>
-                  <p className="text-label uppercase tracking-[0.06em] text-ink-tertiary font-medium mb-2">Gate name</p>
-                  <Input
-                    placeholder="e.g. Main Gate"
-                    value={gateName}
-                    onChange={(e2) => setGateName(e2.target.value)}
-                    disabled={phase === "syncing"}
-                  />
-                  <p className="text-caption text-ink-tertiary mt-1.5">
-                    This device will be registered under that name for this event.
-                  </p>
-                </div>
-              )}
+          {phase === "ready" && (
+            <Button size="lg" iconLeft={<ScanLine size={18} />} onClick={startSync}>Sync tickets to this device</Button>
+          )}
 
-              {event && gateName.trim() && phase === "select" && (
-                <Button size="lg" iconLeft={<ScanLine size={18} />} onClick={startSync}>Sync tickets to this device</Button>
-              )}
-
-              {phase === "syncing" && (
-                <div className="rounded-md border border-line-default bg-surface p-4 flex flex-col gap-3">
-                  <ProgressBar value={progress} max={100} showPercent tone="brand" ariaLabel="Sync progress" />
-                  <p className="text-body-sm text-ink-secondary tabular-nums">
-                    {Math.round((progress / 100) * eventTicketCount)} of {eventTicketCount} tickets cached to this device
-                  </p>
-                </div>
-              )}
+          {phase === "syncing" && (
+            <div className="rounded-md border border-line-default bg-surface p-4 flex flex-col gap-3">
+              <ProgressBar value={progress} max={100} showPercent tone="brand" ariaLabel="Sync progress" />
+              <p className="text-body-sm text-ink-secondary tabular-nums">Pulling cached credentials to this device…</p>
             </div>
           )}
-        </>
+
+          {phase === "ready" && (
+            <button onClick={unenrollDevice} className="text-caption text-ink-tertiary underline text-center">
+              Not this device's gate? Remove enrolment
+            </button>
+          )}
+        </div>
       )}
 
       {phase === "synced" && meta && (
