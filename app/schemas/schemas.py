@@ -53,6 +53,9 @@ class UserOut(BaseModel):
     email: Optional[str]
     wallet_address: Optional[str]
     created_at: datetime
+    # Work Order 04 C1 — the frontend's AuthContext fetches this after
+    # login to know whether to show the Admin surface at all.
+    is_platform_admin: bool = False
 
     model_config = {"from_attributes": True}
 
@@ -276,6 +279,13 @@ class OrganisationOut(BaseModel):
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
+
+class MyOrganisationOut(OrganisationOut):
+    """GET /organisations/mine — adds the caller's own role in this
+    organisation (Work Order 04 C1), which the frontend's AuthContext
+    needs to decide what the Organiser surface should let this user do."""
+    role: str
 
 
 class MemberInvite(BaseModel):
