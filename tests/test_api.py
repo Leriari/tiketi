@@ -70,9 +70,19 @@ def auth_headers(auth_token):
 
 
 @pytest.fixture(scope="module")
-def test_event(auth_headers):
+def test_org(auth_headers):
+    """Work Order 04 B3 — every event now belongs to an organisation the
+    caller owns. The auth_token fixture's user creates (and so owns) it."""
+    res = client.post("/api/v1/organisations/", json={"business_name": "Test Organisation"}, headers=auth_headers)
+    assert res.status_code == 201, res.text
+    return res.json()
+
+
+@pytest.fixture(scope="module")
+def test_event(auth_headers, test_org):
     """Create a test event."""
     payload = {
+        "organization_id": test_org["id"],
         "title": "Nairobi Tech Meetup",
         "venue": "iHub, Westlands",
         "event_date": "2025-12-01T18:00:00",
@@ -326,8 +336,9 @@ def test_purchase_quantity_creates_one_payment_and_n_tickets(test_event, monkeyp
     assert {t["id"] for t in tickets} == set(data["ticket_ids"])
 
 
-def test_purchase_quantity_rejects_more_than_remaining_capacity(auth_headers):
+def test_purchase_quantity_rejects_more_than_remaining_capacity(auth_headers, test_org):
     res = client.post("/api/v1/events/", json={
+        "organization_id": test_org["id"],
         "title": "Tiny Capacity Event",
         "venue": "Test Venue",
         "event_date": "2027-01-01T18:00:00",
@@ -384,44 +395,77 @@ def test_can_purchase_same_event_more_than_once(auth_headers, test_event, monkey
     assert len(res.json()) == before_count + 1
 
 
-# ── Gate Sync Auth Tests (Work Order 03) ────────────────────────────────────────
+# ── Gate Scanner Device Tests (Work Order 03 sync, re-authenticated via
+# device tokens in Work Order 04 B4) ────────────────────────────────────────
 
-def _sync_params():
-    return {"device_id": "test-device-001", "gate_name": "Main Gate"}
+def _register_and_enroll(headers: dict, event_id: str, device_id: str, gate_name: str = "Main Gate") -> str:
+    """Registers a scanner for an event+gate (org-role gated) and enrols a
+    device for it, returning the device token."""
+    res = client.post(
+        "/api/v1/gate/scanners",
+        json={"event_id": event_id, "gate_name": gate_name},
+        headers=headers,
+    )
+    assert res.status_code == 201, res.text
+    code = res.json()["enrollment_code"]
+
+    res = client.post("/api/v1/gate/enroll", json={"enrollment_code": code, "device_id": device_id})
+    assert res.status_code == 200, res.text
+    return res.json()["device_token"]
 
 
-def test_sync_event_requires_auth(test_event):
-    res = client.get(f"/api/v1/gate/sync-event/{test_event['id']}", params=_sync_params())
-    assert res.status_code == 403
-
-
-def test_sync_event_forbidden_for_unrelated_user(test_event):
-    """An authenticated user who did not create this event must not be able
-    to pull ticket secrets for it — only the event's creator can."""
+def test_register_scanner_requires_org_membership(test_event):
+    """An authenticated user who isn't a member of this event's
+    organisation cannot register a gate device for it."""
     phone = "0733000099"
     res = client.post("/api/v1/auth/request-otp", json={"phone_number": phone})
     otp = res.json()["dev_otp"]
     res = client.post("/api/v1/auth/verify-otp", json={"phone_number": phone, "otp_code": otp})
     token = res.json()["access_token"]
 
-    res = client.get(
-        f"/api/v1/gate/sync-event/{test_event['id']}",
-        params=_sync_params(),
+    res = client.post(
+        "/api/v1/gate/scanners",
+        json={"event_id": test_event["id"], "gate_name": "Main Gate"},
         headers={"Authorization": f"Bearer {token}"},
     )
     assert res.status_code == 403
 
 
-def test_sync_event_allowed_for_event_creator(auth_headers, test_event):
-    """The event's creator can sync, and a GateScanner device is
-    auto-registered for them (Work Order 03 — no pre-registration route
-    exists; sync-event itself registers the device on first call)."""
+def test_sync_event_requires_device_token(test_event):
+    res = client.get(f"/api/v1/gate/sync-event/{test_event['id']}")
+    assert res.status_code == 403  # HTTPBearer with no Authorization header
+
+
+def test_sync_event_rejects_wrong_event(auth_headers, test_event, test_org):
+    """A device token is scoped to the one event it enrolled for — it
+    cannot be used to sync any other event, even one in the same org."""
+    res = client.post("/api/v1/events/", json={
+        "organization_id": test_org["id"],
+        "title": "A Different Event",
+        "venue": "Test Venue",
+        "event_date": "2027-02-01T18:00:00",
+        "organizer_phone": "0700000000",
+        "ticket_price_kes": 100,
+        "total_capacity": 10,
+    }, headers=auth_headers)
+    other_event = res.json()
+
+    token = _register_and_enroll(auth_headers, test_event["id"], "test-device-001")
+    res = client.get(
+        f"/api/v1/gate/sync-event/{other_event['id']}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res.status_code == 403
+
+
+def test_sync_event_allowed_for_enrolled_device(auth_headers, test_event):
+    """An enrolled device can sync its own event, and last_sync_at is recorded."""
     from app.models.models import GateScanner
 
+    token = _register_and_enroll(auth_headers, test_event["id"], "test-device-002")
     res = client.get(
         f"/api/v1/gate/sync-event/{test_event['id']}",
-        params=_sync_params(),
-        headers=auth_headers,
+        headers={"Authorization": f"Bearer {token}"},
     )
     assert res.status_code == 200, res.text
     data = res.json()
@@ -430,35 +474,53 @@ def test_sync_event_allowed_for_event_creator(auth_headers, test_event):
     assert isinstance(data["tickets"], list)
 
     db = TestingSessionLocal()
-    scanner = db.query(GateScanner).filter(GateScanner.device_id == "test-device-001").first()
+    scanner = db.query(GateScanner).filter(GateScanner.device_id == "test-device-002").first()
     assert scanner is not None
-    assert scanner.event_id == test_event["id"]
     assert scanner.last_sync_at is not None
     db.close()
 
 
-def test_sync_event_device_reregisters_for_a_different_event(auth_headers, test_event):
-    """The same physical device_id syncing a second, different event
-    re-points its GateScanner row rather than violating the unique
-    constraint on device_id."""
-    from app.models.models import GateScanner
+def test_revoked_device_token_rejected(auth_headers, test_event):
+    token = _register_and_enroll(auth_headers, test_event["id"], "test-device-003")
 
+    from app.models.models import GateScanner
+    db = TestingSessionLocal()
+    scanner = db.query(GateScanner).filter(GateScanner.device_id == "test-device-003").first()
+    scanner_id = scanner.id
+    db.close()
+
+    res = client.post(f"/api/v1/gate/scanners/{scanner_id}/revoke", headers=auth_headers)
+    assert res.status_code == 204
+
+    res = client.get(
+        f"/api/v1/gate/sync-event/{test_event['id']}",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert res.status_code == 401
+
+
+def test_enroll_rejects_reused_device_id_for_a_different_scanner(auth_headers, test_event, test_org):
+    """A device_id already bound to one scanner cannot enrol a second,
+    different one — re-registering the same physical device for a new
+    gate needs an explicit organiser action, not a silent re-point."""
     res = client.post("/api/v1/events/", json={
-        "title": "Second Event For Device Reuse",
+        "organization_id": test_org["id"],
+        "title": "Yet Another Event",
         "venue": "Test Venue",
-        "event_date": "2027-02-01T18:00:00",
+        "event_date": "2027-03-01T18:00:00",
         "organizer_phone": "0700000000",
         "ticket_price_kes": 100,
         "total_capacity": 10,
     }, headers=auth_headers)
     second_event = res.json()
 
-    client.get(f"/api/v1/gate/sync-event/{test_event['id']}", params=_sync_params(), headers=auth_headers)
-    res = client.get(f"/api/v1/gate/sync-event/{second_event['id']}", params=_sync_params(), headers=auth_headers)
-    assert res.status_code == 200, res.text
+    _register_and_enroll(auth_headers, test_event["id"], "test-device-004")
 
-    db = TestingSessionLocal()
-    scanners = db.query(GateScanner).filter(GateScanner.device_id == "test-device-001").all()
-    assert len(scanners) == 1
-    assert scanners[0].event_id == second_event["id"]
-    db.close()
+    res = client.post(
+        "/api/v1/gate/scanners",
+        json={"event_id": second_event["id"], "gate_name": "Side Gate"},
+        headers=auth_headers,
+    )
+    code = res.json()["enrollment_code"]
+    res = client.post("/api/v1/gate/enroll", json={"enrollment_code": code, "device_id": "test-device-004"})
+    assert res.status_code == 409
