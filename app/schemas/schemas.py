@@ -60,6 +60,9 @@ class UserOut(BaseModel):
 # ─── Events ───────────────────────────────────────────────────────────────────
 
 class EventCreate(BaseModel):
+    # Required (Work Order 04 B3) — every event belongs to an organisation.
+    # The caller must be an OWNER member of it (app/core/authz.py).
+    organization_id: str
     title: str
     description: Optional[str] = None
     venue: str
@@ -258,6 +261,83 @@ class ResaleWithdrawRequest(BaseModel):
         if v <= 0:
             raise ValueError("Amount must be positive")
         return v
+
+
+# ─── Organisations (Work Order 04 B2) ─────────────────────────────────────────
+
+class OrganisationCreate(BaseModel):
+    business_name: str
+
+
+class OrganisationOut(BaseModel):
+    id: str
+    business_name: str
+    verification_status: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class MemberInvite(BaseModel):
+    phone_number: str
+    role: str  # "owner" | "staff"
+
+    @field_validator("phone_number")
+    @classmethod
+    def validate_phone(cls, v):
+        return normalize_kenyan_phone(v)
+
+    @field_validator("role")
+    @classmethod
+    def valid_role(cls, v):
+        if v not in ("owner", "staff"):
+            raise ValueError("role must be 'owner' or 'staff'")
+        return v
+
+
+class MemberRoleUpdate(BaseModel):
+    role: str
+
+    @field_validator("role")
+    @classmethod
+    def valid_role(cls, v):
+        if v not in ("owner", "staff"):
+            raise ValueError("role must be 'owner' or 'staff'")
+        return v
+
+
+class MemberOut(BaseModel):
+    id: str
+    account_id: str
+    phone_number: str
+    role: str
+    created_at: datetime
+
+
+# ─── Scanner devices (Work Order 04 B4) ───────────────────────────────────────
+
+class ScannerRegisterRequest(BaseModel):
+    event_id: str
+    gate_name: str
+
+
+class ScannerRegisterResponse(BaseModel):
+    scanner_id: str
+    enrollment_code: str
+    expires_at: datetime
+
+
+class ScannerEnrollRequest(BaseModel):
+    enrollment_code: str
+    device_id: str
+
+
+class ScannerEnrollResponse(BaseModel):
+    device_token: str
+    scanner_id: str
+    event_id: str
+    event_title: str
+    gate_name: str
 
 
 class TicketSeedResponse(BaseModel):

@@ -104,7 +104,10 @@ def test_purchase_rate_limited_by_authenticated_user(monkeypatch):
     login_res = client.post("/api/v1/auth/login", json={"phone_number": phone})
     headers = {"Authorization": f"Bearer {login_res.json()['access_token']}"}
 
+    org_res = client.post("/api/v1/organisations/", json={"business_name": "Rate Limit Test Org"}, headers=headers)
+
     event_res = client.post("/api/v1/events/", json={
+        "organization_id": org_res.json()["id"],
         "title": "Rate Limit Test Event",
         "venue": "Test Venue",
         "event_date": "2027-03-01T18:00:00",
