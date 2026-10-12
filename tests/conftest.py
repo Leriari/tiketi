@@ -23,6 +23,15 @@ for `npx hardhat node` is a cmd.exe/npx wrapper, not the underlying node.exe
 port 8545 (this exact failure mode has bitten manual testing earlier in
 this project). Teardown instead finds the actual PID bound to port 8545
 via `netstat` and kills that directly.
+
+Also points REDIS_URL at a dedicated logical DB (15) on the same local
+Redis server, for the same reason as the blockchain override above: Work
+Order 04 moves the OTP store and rate-limit counters into real Redis, and
+the test suite must not read or pollute whatever's sitting in the dev
+server's db 0 (or leave counters behind that make a later manual test run
+spuriously 429). `flushdb()` on that one logical DB at session start makes
+every pytest run start from a clean slate regardless of what a previous
+run left behind; it never touches db 0.
 """
 import os
 import re
@@ -115,6 +124,10 @@ def pytest_configure(config):
     os.environ["BLOCKCHAIN_RPC_URL"] = "http://127.0.0.1:8545"
     os.environ["NFT_CONTRACT_ADDRESS"] = match.group(1)
     os.environ["MINTER_PRIVATE_KEY"] = LOCAL_MINTER_PRIVATE_KEY
+
+    os.environ["REDIS_URL"] = "redis://localhost:6379/15"
+    import redis
+    redis.Redis.from_url(os.environ["REDIS_URL"]).flushdb()
 
 
 def pytest_unconfigure(config):
