@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
 from app.core.config import get_settings
-from app.api.routes import auth, events, payments, tickets, gate, resale, dev
+from app.api.routes import auth, events, payments, tickets, gate, resale, dev, organisations
 
 settings = get_settings()
 
@@ -39,6 +39,7 @@ app.include_router(payments.router, prefix=PREFIX)
 app.include_router(tickets.router,  prefix=PREFIX)
 app.include_router(gate.router,     prefix=PREFIX)
 app.include_router(resale.router,   prefix=PREFIX)
+app.include_router(organisations.router, prefix=PREFIX)
 # Deliberately NOT under PREFIX — /dev/otp-inbox is not part of the
 # versioned public API surface at all (Work Order 04 A5).
 app.include_router(dev.router)

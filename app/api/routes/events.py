@@ -3,9 +3,10 @@ from sqlalchemy.orm import Session
 from typing import List
 
 from app.db.session import get_db
-from app.models.models import Event, EventTier, EventStatus, TierStatus
+from app.models.models import Event, EventTier, EventStatus, TierStatus, OrganizerRole
 from app.schemas.schemas import EventCreate, EventOut
 from app.core.dependencies import get_current_user
+from app.core.authz import check_org_role
 from app.models.models import User
 
 router = APIRouter(prefix="/events", tags=["Events"])
@@ -18,13 +19,20 @@ def create_event(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Create a new ticketed event.
+    Create a new ticketed event, under an organisation the caller owns
+    (Work Order 04 B3) — "any authenticated user can create an event for
+    any organiser" was the exact defect this replaces. Only an OWNER may
+    create; STAFF is a scoped, view-and-scan-only role (see
+    app/core/authz.py).
 
     Pricing/capacity/resale rules are stored on a single "General" EventTier —
     Event itself only holds venue-wide totals. The request/response API stays
     flat for now; multi-tier events are a Phase 2 API change.
     """
+    check_org_role(db, current_user.id, body.organization_id, OrganizerRole.OWNER)
+
     event = Event(
+        organizer_id=body.organization_id,
         title=body.title,
         description=body.description,
         venue=body.venue,
