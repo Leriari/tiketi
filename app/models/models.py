@@ -47,9 +47,17 @@ class OrganizerVerificationStatus(str, enum.Enum):
 
 
 class OrganizerRole(str, enum.Enum):
-    OWNER          = "owner"
-    STAFF          = "staff"
-    GATE_OPERATOR  = "gate_operator"
+    """
+    The two organisation-scoped roles (Work Order 04 B1). PLATFORM_ADMIN
+    and SCANNER are deliberately not values here: PLATFORM_ADMIN is the one
+    genuinely global role (User.is_platform_admin, below) rather than a
+    relationship to any one organisation, and SCANNER is a device identity
+    (GateScanner + its device token, B4), not a user-role grant at all.
+    ATTENDEE is simply the absence of any OrganizerMember row — every user
+    is one by default, so it has no enum value either.
+    """
+    OWNER = "owner"  # ORGANISER_OWNER — everything for this organisation and its events
+    STAFF = "staff"  # ORGANISER_STAFF — view and scan, not create or withdraw
 
 
 class EventStatus(str, enum.Enum):
@@ -137,15 +145,30 @@ class User(Base):
     wallet_address: Mapped[str | None] = mapped_column(String(42))
     # Self-custody address a user can optionally claim tickets out to (report: "claimTicket()")
     external_wallet_address: Mapped[str | None] = mapped_column(String(42))
-    # Matches the class diagram's User.isOrganizer flag
+    # Convenience flag only (Work Order 04 B1) — "does this user belong to
+    # any organisation at all," kept in sync whenever an OrganizerMember row
+    # is created for them (app/api/routes/organisations.py). NEVER read by
+    # any authorisation check — real permission decisions always go through
+    # OrganizerMember.role for a *specific* organisation (app/core/authz.py),
+    # since a flat boolean can't express "owner here, staff there."
     is_organizer: Mapped[bool] = mapped_column(Boolean, default=False)
+    # The one genuinely global role (Work Order 04 B1) — every other role is
+    # a relationship to a specific organisation (OrganizerMember.role) or a
+    # device identity (GateScanner's device token), not a flag on User.
+    # Nothing in the codebase can set this to True except the CLI script
+    # scripts/promote_platform_admin.py, run manually against the database —
+    # see B5: there must be no code path that lets a user grant it to
+    # themselves.
+    is_platform_admin: Mapped[bool] = mapped_column(Boolean, default=False)
 
     tickets: Mapped[list["Ticket"]] = relationship("Ticket", back_populates="owner")
     payments: Mapped[list["Payment"]] = relationship("Payment", back_populates="user")
 
 
 class Organizer(Base):
-    """A verified event-organizing business. Not yet wired to any route (Phase 2)."""
+    """A verified event-organizing business. Wired via app/api/routes/organisations.py
+    (Work Order 04 B2) — onboarding only, no verification workflow is built;
+    verification_status is set PENDING and never progressed automatically."""
     __tablename__ = "organizers"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -160,7 +183,9 @@ class Organizer(Base):
 
 
 class OrganizerMember(Base):
-    """Links a User account to an Organizer with a role. Not yet wired to any route."""
+    """Links a User account to an Organizer with a role (OWNER/STAFF). Wired via
+    app/api/routes/organisations.py and enforced by app/core/authz.py's
+    require_org_role/require_event_org_role (Work Order 04 B2/B3)."""
     __tablename__ = "organizer_members"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -168,6 +193,9 @@ class OrganizerMember(Base):
     account_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
     role: Mapped[OrganizerRole] = mapped_column(SAEnum(OrganizerRole), default=OrganizerRole.STAFF)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+    organizer: Mapped["Organizer"] = relationship("Organizer")
+    user: Mapped["User"] = relationship("User")
 
 
 class Event(Base):
@@ -462,7 +490,20 @@ class Transfer(Base):
 
 
 class GateScanner(Base):
-    """A registered gate-scanning device. Not yet wired to any route."""
+    """
+    A registered gate-scanning device. Wired via app/api/routes/gate.py's
+    /gate/scanners (register + revoke) and /gate/enroll (Work Order 04 B4).
+
+    Lifecycle: an organiser registers intent for one event+gate
+    (device_id/device_token_hash null, enrollment_code set, status
+    INACTIVE) -> the physical device submits that code once via
+    /gate/enroll, choosing its own device_id and receiving a long-lived
+    device token in return (enrollment_code cleared, device_token_hash
+    set, status ACTIVE) -> sync/scan-upload authenticate with that token,
+    not a user JWT (app.core.authz.get_current_scanner). Revoking sets
+    status back to INACTIVE, which invalidates the token immediately
+    (get_current_scanner requires ACTIVE).
+    """
     __tablename__ = "gate_scanners"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -471,7 +512,17 @@ class GateScanner(Base):
     account_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"))  # operator account
 
     gate_name: Mapped[str] = mapped_column(String(100), nullable=False)
-    device_id: Mapped[str] = mapped_column(String(100), unique=True, nullable=False)
+    # Nullable until the device actually enrolls — registration (the
+    # organiser's step) happens before any physical device has connected or
+    # chosen an id for itself.
+    device_id: Mapped[str | None] = mapped_column(String(100), unique=True)
+    # Single-use, time-limited — consumed and cleared by /gate/enroll.
+    enrollment_code: Mapped[str | None] = mapped_column(String(20), index=True)
+    enrollment_code_expires_at: Mapped[datetime | None] = mapped_column(DateTime)
+    # SHA-256 of the long-lived device token — the token itself is never
+    # stored, only ever returned once at enrolment time, same reasoning as
+    # not storing a password or API key in plaintext.
+    device_token_hash: Mapped[str | None] = mapped_column(String(64), index=True)
     last_sync_at: Mapped[datetime | None] = mapped_column(DateTime)
     status: Mapped[GateScannerStatus] = mapped_column(
         SAEnum(GateScannerStatus), default=GateScannerStatus.ACTIVE
