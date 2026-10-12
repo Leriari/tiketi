@@ -133,6 +133,36 @@ def test_promoting_a_second_owner_allows_the_first_to_step_down():
     assert res.status_code == 200  # a second owner exists now, so this is fine
 
 
+# ── C1: role/org data the frontend's AuthContext fetches after login ────────
+
+def test_me_includes_is_platform_admin():
+    headers = _login("0799111020")
+    res = client.get("/api/v1/auth/me", headers=headers)
+    assert res.status_code == 200
+    assert res.json()["is_platform_admin"] is False
+
+
+def test_organisations_mine_includes_caller_role():
+    owner_headers = _login("0799111021")
+    org = _create_org(owner_headers, "C1 Test Org")
+
+    res = client.get("/api/v1/organisations/mine", headers=owner_headers)
+    assert res.status_code == 200
+    mine = res.json()
+    assert len(mine) == 1
+    assert mine[0]["id"] == org["id"]
+    assert mine[0]["role"] == "owner"
+
+    staff_headers = _login("0799111022")
+    client.post(
+        f"/api/v1/organisations/{org['id']}/members",
+        json={"phone_number": "0799111022", "role": "staff"},
+        headers=owner_headers,
+    )
+    res = client.get("/api/v1/organisations/mine", headers=staff_headers)
+    assert res.json()[0]["role"] == "staff"
+
+
 # ── B3: cross-organisation scoping — negative tests for every protected route ─
 # These are worth more than the happy-path ones: the happy path is the one
 # you'd notice is broken.

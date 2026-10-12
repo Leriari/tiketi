@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models.models import Organizer, OrganizerMember, OrganizerRole, OrganizerVerificationStatus, User
 from app.schemas.schemas import (
-    OrganisationCreate, OrganisationOut, MemberInvite, MemberRoleUpdate, MemberOut,
+    OrganisationCreate, OrganisationOut, MyOrganisationOut, MemberInvite, MemberRoleUpdate, MemberOut,
 )
 from app.core.dependencies import get_current_user
 from app.core.authz import require_org_role
@@ -49,11 +49,22 @@ def create_organisation(
     return org
 
 
-@router.get("/mine", response_model=list[OrganisationOut])
+@router.get("/mine", response_model=list[MyOrganisationOut])
 def list_my_organisations(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    """Every organisation the current user is a member of, any role."""
+    """Every organisation the current user is a member of, any role, with
+    the caller's own role in each — the frontend's AuthContext (C1) uses
+    this to decide whether the Organiser surface is reachable at all."""
     memberships = db.query(OrganizerMember).filter(OrganizerMember.account_id == current_user.id).all()
-    return [m.organizer for m in memberships if m.organizer]
+    return [
+        MyOrganisationOut(
+            id=m.organizer.id,
+            business_name=m.organizer.business_name,
+            verification_status=m.organizer.verification_status.value,
+            created_at=m.organizer.created_at,
+            role=m.role.value,
+        )
+        for m in memberships if m.organizer
+    ]
 
 
 @router.get("/{organization_id}/members", response_model=list[MemberOut])
