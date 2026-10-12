@@ -256,6 +256,33 @@ wired into the backend yet, only minting is.
 
 ---
 
+## Roles & Authorisation (Work Order 04)
+
+Five roles: `ATTENDEE` (default — every user, buy/hold/resell/claim own
+tickets), `ORGANISER_OWNER`/`ORGANISER_STAFF` (scoped to one organisation
+via `OrganizerMember.role` — owner can do everything for their org and its
+events, staff can view and scan but not create or withdraw),
+`SCANNER` (a device identity, not a user — see below), `PLATFORM_ADMIN`
+(the one global role, `User.is_platform_admin`).
+
+- `/api/v1/organisations/` — create an organisation (creator becomes
+  owner), invite/list/re-role/remove members. An organisation can never be
+  left with no owner.
+- Event creation requires `organization_id` and an `ORGANISER_OWNER`
+  membership in it — every event belongs to an organisation now.
+- Scanner devices: an organiser registers a device for one event+gate via
+  `POST /gate/scanners` and gets a one-time enrolment code; the physical
+  device submits it once via `POST /gate/enroll` and gets back a
+  long-lived device token (scoped to that single event+gate). Sync
+  authenticates with that token, not a user JWT. `POST /gate/scanners/{id}/revoke`
+  invalidates it immediately.
+- **Bootstrapping the first `PLATFORM_ADMIN`**: there is no code path that
+  lets a user grant this to themselves. Run manually against the database:
+  ```bash
+  python scripts/promote_platform_admin.py 0712345678
+  python scripts/promote_platform_admin.py 0712345678 --revoke
+  ```
+
 ## Security Notes
 
 - **TOTP secrets** (`Barcode.token`) are encrypted at rest with Fernet (`CREDENTIAL_ENCRYPTION_KEY`, required env var) — Work Order 04 A4. Decrypted only lazily, in one place (`Ticket.totp_secret`), when a code actually needs to be computed or synced
