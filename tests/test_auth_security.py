@@ -5,6 +5,10 @@ Reuses test_api.py's TestClient/DB setup, same reasoning as test_resale.py:
 two separate engines both bound to app.dependency_overrides would fight
 over which one a given test actually hits.
 """
+import os
+import pytest
+from cryptography.fernet import Fernet
+
 from tests.test_api import client
 from app.services.auth_service import MAX_OTP_ATTEMPTS
 
@@ -141,3 +145,58 @@ def test_request_otp_response_identical_for_new_and_existing_number():
     assert res_existing.status_code == 200
     assert set(res_existing.json().keys()) == set(res_new.json().keys())
     assert res_existing.json()["message"] == res_new.json()["message"]
+
+
+# ── A5: the two fail-closed guarantees for the dev OTP inbox ────────────────
+# These are what let the dissertation state the simulation cannot leak into
+# a deployment: one proves the route itself refuses to serve outside
+# development, the other proves the dangerous config combination can't even
+# boot.
+
+def test_otp_inbox_404s_when_not_development(monkeypatch):
+    from app.core.config import get_settings
+
+    monkeypatch.setenv("APP_ENV", "production")
+    get_settings.cache_clear()
+    try:
+        res = client.get("/dev/otp-inbox")
+        assert res.status_code == 404
+    finally:
+        # get_settings is process-wide lru_cache'd — leaving it cleared
+        # with the monkeypatched env (which pytest is about to revert)
+        # would serve every subsequent test a "production" Settings object.
+        get_settings.cache_clear()
+
+
+def test_otp_inbox_200s_in_development():
+    """Sanity check for the test above: confirms the 404 is really the
+    APP_ENV gate, not the route being broken or missing."""
+    res = client.get("/dev/otp-inbox")
+    assert res.status_code == 200
+    assert isinstance(res.json(), list)
+
+
+def test_app_refuses_to_start_with_inbox_channel_outside_development():
+    from app.core.config import Settings
+
+    with pytest.raises(Exception):
+        Settings(
+            APP_ENV="production",
+            SECRET_KEY="test-secret",
+            MPESA_CALLBACK_URL="https://example.com/callback",
+            CREDENTIAL_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+            OTP_DELIVERY_CHANNEL="inbox",
+        )
+
+
+def test_app_starts_fine_with_inbox_channel_in_development():
+    from app.core.config import Settings
+
+    # Must NOT raise.
+    Settings(
+        APP_ENV="development",
+        SECRET_KEY="test-secret",
+        MPESA_CALLBACK_URL="https://example.com/callback",
+        CREDENTIAL_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+        OTP_DELIVERY_CHANNEL="inbox",
+    )

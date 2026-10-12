@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.schemas.schemas import PhoneOTPRequest, OTPVerifyRequest, TokenResponse, UserOut
-from app.services import auth_service
+from app.services import auth_service, otp_delivery
 from app.core.dependencies import get_current_user
 from app.core.rate_limit import enforce_rate_limit, client_ip
 from app.models.models import User
@@ -36,7 +36,7 @@ async def request_otp(body: PhoneOTPRequest, request: Request, db: Session = Dep
 
     otp = auth_service.generate_otp()
     auth_service.store_otp(body.phone_number, otp)
-    await auth_service.send_otp_sms(body.phone_number, otp)
+    otp_delivery.deliver_otp(body.phone_number, otp, db)
 
     response = {"message": "OTP sent", "phone_number": body.phone_number}
 
