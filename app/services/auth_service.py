@@ -94,17 +94,17 @@ def verify_otp(phone_number: str, otp_code: str) -> bool:
     return True
 
 
-async def send_otp_sms(phone_number: str, otp: str):
+def peek_otp(phone_number: str) -> str | None:
     """
-    SMS delivery is out of scope for this project. Logs the OTP to console
-    so it reaches the developer during testing.
-
-    Note (Work Order 04 A5): this becomes a pluggable delivery abstraction
-    in app/services/otp_delivery.py — left as a plain console log for now
-    so Block A's earlier tasks (A1-A4) land as independent, reviewable
-    commits before that refactor.
+    Read-only: the current pending OTP for a phone number, without
+    consuming it or counting it as an attempt. Used only by the dev-only
+    GET /dev/otp-inbox endpoint (app/api/routes/dev.py) — never by any
+    authentication decision path.
     """
-    logger.info(f"[DEV] OTP for {phone_number}: {otp}")
+    raw = get_redis_client().get(_otp_key(phone_number))
+    if not raw:
+        return None
+    return json.loads(raw)["otp"]
 
 
 def get_or_create_user(db: Session, phone_number: str) -> User:

@@ -1,3 +1,4 @@
+from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
 
@@ -6,7 +7,11 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     # App
-    APP_ENV: str = "development"
+    # Required, no default (Work Order 04 A5) — "unset" must never silently
+    # resolve to "development". Every other APP_ENV == "development" check
+    # in this codebase (dev-confirm, the OTP dev_otp field, this file's own
+    # validator below) depends on that never happening by accident.
+    APP_ENV: str
     SECRET_KEY: str  # required — no insecure default; set in .env
     DEBUG: bool = True
     API_V1_PREFIX: str = "/api/v1"
@@ -37,6 +42,12 @@ class Settings(BaseSettings):
 
     # OTP
     OTP_EXPIRE_SECONDS: int = 300
+    # console: log to server log (current/default). inbox: write a
+    # Notification row, readable via the dev-only /dev/otp-inbox endpoint.
+    # sms: raises NotImplementedError — documents that no gateway is wired
+    # up rather than silently pretending one exists. See
+    # app/services/otp_delivery.py.
+    OTP_DELIVERY_CHANNEL: str = "console"
 
     # TOTP
     TOTP_ISSUER: str = "TiketiKE"
@@ -57,6 +68,23 @@ class Settings(BaseSettings):
     @property
     def BLOCKCHAIN_CONFIGURED(self) -> bool:
         return bool(self.BLOCKCHAIN_RPC_URL and self.NFT_CONTRACT_ADDRESS and self.MINTER_PRIVATE_KEY)
+
+    @model_validator(mode="after")
+    def _otp_inbox_requires_development(self) -> "Settings":
+        """
+        GET /dev/otp-inbox is a complete authentication bypass if it is ever
+        reachable outside development (Work Order 04 A5). The route itself
+        fail-closes on APP_ENV at request time, but that only helps if the
+        channel that feeds it was never enabled in the first place — this
+        makes the dangerous combination impossible to boot with at all,
+        rather than merely discouraged.
+        """
+        if self.OTP_DELIVERY_CHANNEL == "inbox" and self.APP_ENV != "development":
+            raise ValueError(
+                "OTP_DELIVERY_CHANNEL=inbox is only permitted when "
+                "APP_ENV=development — refusing to start."
+            )
+        return self
 
 
 @lru_cache

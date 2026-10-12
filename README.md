@@ -258,12 +258,15 @@ wired into the backend yet, only minting is.
 
 ## Security Notes
 
-- **TOTP secrets** are stored in the database. In production, encrypt them at rest using a KMS (e.g. AWS KMS, Google Cloud KMS)
-- **OTP store** is currently in-memory. In production, move to Redis with TTL
-- **Gate sync endpoint** (`/gate/sync-event/`) now requires a JWT and checks the caller is an organizer-member of the event or a registered gate-scanner device for it (403 otherwise). No route yet creates those `OrganizerMember`/`GateScanner` rows, so in practice this only grants access via a directly-inserted `GateScanner` row today — registration endpoints for those are still Phase 2 work
+- **TOTP secrets** (`Barcode.token`) are encrypted at rest with Fernet (`CREDENTIAL_ENCRYPTION_KEY`, required env var) — Work Order 04 A4. Decrypted only lazily, in one place (`Ticket.totp_secret`), when a code actually needs to be computed or synced
+- **OTP store** moved from an in-memory dict to Redis, with a TTL matching `OTP_EXPIRE_SECONDS` — Work Order 04 A1. Codes are single-use and locked out after 5 wrong attempts (`app/services/auth_service.py`)
+- **Rate limiting** (Redis-backed, by phone number *and* client IP) on `/auth/request-otp`, `/auth/verify-otp`, `/auth/login`, and by authenticated user on `/payments/purchase` — Work Order 04 A3 (`app/core/rate_limit.py`)
+- **OTP delivery is pluggable** (`OTP_DELIVERY_CHANNEL=console|inbox|sms`, `app/services/otp_delivery.py`) — Work Order 04 A5. `sms` raises `NotImplementedError` naming the gateway that would go here; no real SMS provider is integrated. `inbox` writes to the `notifications` table, readable via the dev-only `GET /dev/otp-inbox`, which 404s outside `APP_ENV=development` and cannot even be enabled outside development (`Settings` refuses to construct with that combination)
+- `APP_ENV` is now a required env var with no default — an unset `APP_ENV` fails the app at startup rather than silently behaving as development
+- **Gate sync endpoint** (`/gate/sync-event/`) requires a JWT and checks the caller is the event's creator (403 otherwise) — Work Order 03
 - The **M-Pesa callback** endpoint has no auth by design (Daraja requirement) — validate `checkout_request_id` to prevent spoofing
-- `SECRET_KEY` and `MPESA_CALLBACK_URL` are required env vars with no default — the app refuses to start if either is unset, rather than silently running with an insecure placeholder. Rotate `SECRET_KEY` and never commit it — use environment variables or a secrets manager
-- SMS delivery (Africa's Talking) has been removed entirely — OTPs are logged to console only. Add a real SMS provider before this goes anywhere near production users
+- `SECRET_KEY`, `MPESA_CALLBACK_URL`, and `CREDENTIAL_ENCRYPTION_KEY` are required env vars with no default — the app refuses to start if any is unset, rather than silently running with an insecure placeholder. Rotate and never commit them — use environment variables or a secrets manager
+- **Still a known gap**: no real organisation/role-based authorisation model exists yet — any authenticated user can create an event for any "organiser" (Work Order 04 Block B addresses this)
 
 ---
 
