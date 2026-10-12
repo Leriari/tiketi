@@ -318,9 +318,18 @@ class Ticket(Base):
     @property
     def totp_secret(self) -> str | None:
         """Compatibility shim — routes keep reading `ticket.totp_secret` even though the
-        seed now lives on the ticket's current Barcode row instead of a column here."""
+        seed now lives on the ticket's current Barcode row instead of a column here.
+
+        Barcode.token is encrypted at rest (Work Order 04 A4) — this is the
+        one place it gets decrypted back to the raw base32 secret. Every
+        caller (gate.py's scan handler, the gate-sync payload, tickets.py's
+        seed/QR endpoints) reads through this property rather than the
+        column directly, so none of them need to know encryption exists."""
         barcode = self.current_barcode
-        return barcode.token if barcode else None
+        if not barcode:
+            return None
+        from app.core.crypto import decrypt_secret
+        return decrypt_secret(barcode.token)
 
 
 class Payment(Base):
@@ -370,8 +379,10 @@ class Barcode(Base):
     event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), nullable=False)
     owner_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
 
-    # Base32 TOTP secret seed — stored encrypted in production (see README security notes)
-    token: Mapped[str] = mapped_column(String(64), nullable=False)
+    # Fernet-encrypted base32 TOTP secret seed (Work Order 04 A4) — a Fernet
+    # token is well over the plaintext's 32 chars, hence Text rather than
+    # the String(64) this column started as.
+    token: Mapped[str] = mapped_column(Text, nullable=False)
     token_version: Mapped[int] = mapped_column(Integer, default=1)
     status: Mapped[BarcodeStatus] = mapped_column(SAEnum(BarcodeStatus), default=BarcodeStatus.ACTIVE)
     # Unused until Phase 4 (client-side rotation/offline validation) needs an expiry window
