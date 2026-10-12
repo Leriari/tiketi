@@ -18,6 +18,7 @@ from app.models.models import (
 from app.schemas.schemas import PurchaseRequest, PurchaseResponse, PaymentStatusOut
 from app.services import mpesa as mpesa_service
 from app.services.totp_service import generate_totp_secret
+from app.core.crypto import encrypt_secret
 from app.core.dependencies import get_current_user
 from app.core.config import get_settings
 from app.core.rate_limit import enforce_rate_limit
@@ -152,7 +153,7 @@ async def purchase_ticket(
             ticket_id=ticket.id,
             event_id=event.id,
             owner_id=current_user.id,
-            token=generate_totp_secret(),
+            token=encrypt_secret(generate_totp_secret()),
             token_version=1,
             status=BarcodeStatus.ACTIVE,
         )

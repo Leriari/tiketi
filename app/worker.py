@@ -140,6 +140,7 @@ def settle_resale_transfer(self, transfer_id: str):
     )
     from app.services import web3_service
     from app.services.totp_service import generate_totp_secret
+    from app.core.crypto import encrypt_secret
     from app.core.constants import PLATFORM_FEE_PERCENT
 
     if not settings.BLOCKCHAIN_CONFIGURED:
@@ -198,7 +199,7 @@ def settle_resale_transfer(self, transfer_id: str):
             ticket_id=ticket.id,
             event_id=ticket.event_id,
             owner_id=transfer.buyer_id,
-            token=generate_totp_secret(),
+            token=encrypt_secret(generate_totp_secret()),
             token_version=latest_version + 1,
             status=BarcodeStatus.ACTIVE,
         ))

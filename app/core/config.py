@@ -41,6 +41,12 @@ class Settings(BaseSettings):
     # TOTP
     TOTP_ISSUER: str = "TiketiKE"
 
+    # Credential encryption (Work Order 04 A4) — encrypts Barcode.token
+    # (the TOTP secret seed) at rest. Required, no insecure default, same
+    # reasoning as SECRET_KEY: a Fernet key, e.g. generated with
+    # `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`
+    CREDENTIAL_ENCRYPTION_KEY: str
+
     # Blockchain (Base Sepolia) — all optional. Left unset, minting stays a
     # logged no-op stub rather than the app failing to start; this feature is
     # additive, not load-bearing for the rest of the platform.
