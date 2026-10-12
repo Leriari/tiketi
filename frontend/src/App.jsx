@@ -1,5 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import ScrollToTop from "./ScrollToTop";
+import AuthErrorToast from "./AuthErrorToast";
+import { RequireOrgMembership, RequirePlatformAdmin, RequireDeviceToken } from "./routeGuards";
 import { AuthProvider } from "./context/AuthContext";
 import { ToastProvider } from "./components/ui/Toast";
 import { ThemeProvider } from "./theme/ThemeProvider";
@@ -75,6 +77,7 @@ export default function App() {
       <ScrollToTop />
       <ToastProvider>
         <AuthProvider>
+          <AuthErrorToast />
           <Routes>
             <Route
               path="/dev/components"
@@ -109,49 +112,55 @@ export default function App() {
               <Route path="profile" element={<SellerProfile />} />
             </Route>
 
-            <Route path="/organiser" element={<OrganiserShell />}>
-              <Route index element={<ControlCenter />} />
-              <Route path="earnings" element={<Earnings />} />
-              <Route path="reports" element={<Reports />} />
-              <Route path="marketing" element={<MarketingAnalytics />} />
-              <Route path="tickets" element={<TicketCentral />} />
-              <Route path="audit" element={<AuditLookup />} />
-              <Route path="events/new" element={<EventManagement />} />
-              <Route path="events/:eventId/edit" element={<EventManagement />} />
-              <Route path="crowd-control" element={<CrowdControl />} />
-              <Route path="scanners" element={<ScannerHub />} />
-              <Route path="scan" element={<LiveScanner />} />
-              <Route path="guests" element={<GuestLists />} />
-              <Route path="contract" element={<ContractStatus />} />
-              <Route path="royalties" element={<RoyaltyLedger />} />
-              <Route path="compliance" element={<ResaleCompliance />} />
-              <Route path="attendance" element={<Attendance />} />
-              <Route path="revenue" element={<RevenueBreakdown />} />
-              <Route path="exports" element={<ExportCentre />} />
-              <Route path="profile" element={<OrganisationProfile />} />
-              <Route path="payouts" element={<PayoutDetails />} />
-              <Route path="team" element={<TeamRoles />} />
+            <Route element={<RequireOrgMembership />}>
+              <Route path="/organiser" element={<OrganiserShell />}>
+                <Route index element={<ControlCenter />} />
+                <Route path="earnings" element={<Earnings />} />
+                <Route path="reports" element={<Reports />} />
+                <Route path="marketing" element={<MarketingAnalytics />} />
+                <Route path="tickets" element={<TicketCentral />} />
+                <Route path="audit" element={<AuditLookup />} />
+                <Route path="events/new" element={<EventManagement />} />
+                <Route path="events/:eventId/edit" element={<EventManagement />} />
+                <Route path="crowd-control" element={<CrowdControl />} />
+                <Route path="scanners" element={<ScannerHub />} />
+                <Route path="scan" element={<LiveScanner />} />
+                <Route path="guests" element={<GuestLists />} />
+                <Route path="contract" element={<ContractStatus />} />
+                <Route path="royalties" element={<RoyaltyLedger />} />
+                <Route path="compliance" element={<ResaleCompliance />} />
+                <Route path="attendance" element={<Attendance />} />
+                <Route path="revenue" element={<RevenueBreakdown />} />
+                <Route path="exports" element={<ExportCentre />} />
+                <Route path="profile" element={<OrganisationProfile />} />
+                <Route path="payouts" element={<PayoutDetails />} />
+                <Route path="team" element={<TeamRoles />} />
+              </Route>
             </Route>
 
             <Route path="/scanner" element={<ScannerShell />}>
               <Route index element={<ScannerSync />} />
-              <Route path="scan" element={<ScannerScan />} />
+              <Route element={<RequireDeviceToken />}>
+                <Route path="scan" element={<ScannerScan />} />
+              </Route>
             </Route>
 
-            <Route path="/admin" element={<AdminShell />}>
-              <Route index element={<PlatformDashboard />} />
-              <Route path="organisers" element={<OrganiserAccounts />} />
-              <Route path="events" element={<EventApprovals />} />
-              <Route path="costs" element={<PlatformCosts />} />
-              <Route path="fees" element={<FeeConfiguration />} />
-              <Route path="payouts" element={<PayoutQueue />} />
-              <Route path="compliance" element={<AdminResaleCompliance />} />
-              <Route path="fraud" element={<FraudSignals />} />
-              <Route path="audit" element={<AdminAuditLog />} />
-              <Route path="admins" element={<AdminUsers />} />
-              <Route path="broadcasts" element={<CommunicationCenter />} />
-              <Route path="notifications" element={<AdminNotifications />} />
-              <Route path="flags" element={<FeatureFlags />} />
+            <Route element={<RequirePlatformAdmin />}>
+              <Route path="/admin" element={<AdminShell />}>
+                <Route index element={<PlatformDashboard />} />
+                <Route path="organisers" element={<OrganiserAccounts />} />
+                <Route path="events" element={<EventApprovals />} />
+                <Route path="costs" element={<PlatformCosts />} />
+                <Route path="fees" element={<FeeConfiguration />} />
+                <Route path="payouts" element={<PayoutQueue />} />
+                <Route path="compliance" element={<AdminResaleCompliance />} />
+                <Route path="fraud" element={<FraudSignals />} />
+                <Route path="audit" element={<AdminAuditLog />} />
+                <Route path="admins" element={<AdminUsers />} />
+                <Route path="broadcasts" element={<CommunicationCenter />} />
+                <Route path="notifications" element={<AdminNotifications />} />
+                <Route path="flags" element={<FeatureFlags />} />
+              </Route>
             </Route>
 
             <Route path="*" element={<Navigate to="/" replace />} />

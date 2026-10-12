@@ -5,16 +5,11 @@
 // sync with src/mock/mockApi.js so the swap stays a one-line change.
 import { ApiError } from "../errors";
 import { getToken } from "../auth-storage";
+import { getDeviceToken } from "../scanner/deviceAuth";
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api/v1";
 
-async function request(path, { method = "GET", body, auth = true } = {}) {
-  const headers = { "Content-Type": "application/json" };
-  if (auth) {
-    const token = getToken();
-    if (token) headers.Authorization = `Bearer ${token}`;
-  }
-
+async function _send(path, { method, body, headers }) {
   const res = await fetch(`${BASE_URL}${path}`, {
     method,
     headers,
@@ -34,6 +29,26 @@ async function request(path, { method = "GET", body, auth = true } = {}) {
   return data;
 }
 
+async function request(path, { method = "GET", body, auth = true } = {}) {
+  const headers = { "Content-Type": "application/json" };
+  if (auth) {
+    const token = getToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+  }
+  return _send(path, { method, body, headers });
+}
+
+// A gate device authenticates with its own long-lived device token, never
+// a user JWT (Work Order 04 B4) — a steward shouldn't need to be a user
+// account, and a phone at a gate shouldn't carry credentials that work
+// anywhere else. Used only by syncGateData below.
+async function deviceRequest(path, { method = "GET", body } = {}) {
+  const token = getDeviceToken();
+  const headers = { "Content-Type": "application/json" };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  return _send(path, { method, body, headers });
+}
+
 function notImplemented(name) {
   return () => {
     throw new ApiError(
@@ -48,6 +63,9 @@ export const liveApi = {
 
   login: (phone_number) => request("/auth/login", { method: "POST", body: { phone_number }, auth: false }),
   me: () => request("/auth/me"),
+  // Work Order 04 C1 — AuthContext fetches this right after login to know
+  // which organisations (and at which role) this user can manage.
+  getMyOrganisations: () => request("/organisations/mine"),
 
   listEvents: () => request("/events/"),
   getEvent: (id) => request(`/events/${id}`),
@@ -137,12 +155,22 @@ export const liveApi = {
   getRoyaltyLedger: notImplemented("getRoyaltyLedger"),
   getResaleCompliance: notImplemented("getResaleCompliance"),
 
-  // Scanner PWA (spec.md §6 / Work Order 03) — syncGateData is real: it's
-  // the one network call the whole offline-validation design allows (pulls
-  // credentials in, before doors open). reportScanBatch stays a stub —
-  // uploading scan results back is Block B, not built yet.
-  syncGateData: ({ eventId, deviceId, gateName }) =>
-    request(`/gate/sync-event/${eventId}?device_id=${encodeURIComponent(deviceId)}&gate_name=${encodeURIComponent(gateName)}`),
+  // Scanner PWA (spec.md §6 / Work Order 03, re-authenticated in Work
+  // Order 04 B4/C3) — syncGateData is real: it's the one network call the
+  // whole offline-validation design allows (pulls credentials in, before
+  // doors open). Authenticates with the device's own long-lived token
+  // (deviceRequest), not the logged-in user's JWT — a device enrols once
+  // via enrollScanner, and the event/gate it's scoped to come from that
+  // enrolment response (src/scanner/deviceAuth.js), not a parameter
+  // chosen here. reportScanBatch stays a stub — uploading scan results
+  // back is Work Order 03 Block B2, not built yet.
+  syncGateData: ({ eventId }) => deviceRequest(`/gate/sync-event/${eventId}`),
+  enrollScanner: ({ enrollmentCode, deviceId }) =>
+    request("/gate/enroll", {
+      method: "POST",
+      body: { enrollment_code: enrollmentCode, device_id: deviceId },
+      auth: false,
+    }),
   reportScanBatch: notImplemented("reportScanBatch"),
 
   // Platform Admin (spec.md §7) — no backend yet; needs a real multi-tenant
