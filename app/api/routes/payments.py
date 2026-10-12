@@ -20,11 +20,19 @@ from app.services import mpesa as mpesa_service
 from app.services.totp_service import generate_totp_secret
 from app.core.dependencies import get_current_user
 from app.core.config import get_settings
+from app.core.rate_limit import enforce_rate_limit
 from app.worker import mint_ticket_nft, settle_resale_transfer
 
 router = APIRouter(prefix="/payments", tags=["Payments"])
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+# Work Order 04 A3 — a real STK push costs the user nothing to trigger but
+# costs this backend a Daraja API call every time; 30 per 5 minutes is far
+# above any legitimate buyer's rate (the resale test suite alone drives one
+# user through ~15-20 purchases across its run) but still a real ceiling
+# against a script hammering the endpoint.
+_PURCHASE_LIMIT = (30, 300)
 
 
 def _activate_ticket_for_payment(db: Session, payment: Payment, receipt_number: str) -> list[Ticket]:
@@ -103,6 +111,8 @@ async def purchase_ticket(
     A user may buy more than once for the same event, and more than once
     concurrently — there is no one-active-ticket-per-event restriction.
     """
+    enforce_rate_limit(f"purchase:user:{current_user.id}", *_PURCHASE_LIMIT)
+
     # ── 1. Validate event ────────────────────────────────────────────────────
     event = db.query(Event).filter(Event.id == body.event_id, Event.status == EventStatus.PUBLISHED).first()
     if not event:
