@@ -1,0 +1,19 @@
+{
+  "name": "ChainTix Scanner",
+  "short_name": "Scanner",
+  "description": "Offline gate validation — syncs once, then scans with no connectivity.",
+  "start_url": "/scanner",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a0a0f",
+  "theme_color": "#0a0a0f",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
