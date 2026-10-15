@@ -8,7 +8,8 @@
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "measure:offline-accuracy": "node --experimental-loader ./scripts/resolve-extensionless.mjs scripts/measure-offline-accuracy.mjs"
   },
   "dependencies": {
     "@floating-ui/react": "^0.27.20",
