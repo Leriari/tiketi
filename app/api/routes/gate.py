@@ -22,11 +22,16 @@ from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
-from app.models.models import Ticket, TicketStatus, Event, GateScanner, GateScannerStatus, AuditLog, User, OrganizerRole
+from app.models.models import (
+    Ticket, TicketStatus, Event, GateScanner, GateScannerStatus, AuditLog, User, OrganizerRole,
+    Attendance, AttendanceStatus,
+)
 from app.core.dependencies import get_current_user
 from app.core.authz import check_org_role, get_current_scanner, hash_token, generate_token
+from app.services.gate_partitioning import assign_gate
 from app.schemas.schemas import (
     ScannerRegisterRequest, ScannerRegisterResponse, ScannerEnrollRequest, ScannerEnrollResponse,
+    ScanUploadRequest, ScanUploadResultItem,
 )
 
 router = APIRouter(prefix="/gate", tags=["Gate Validation"])
@@ -218,16 +223,21 @@ def sync_event_tickets(
 ):
     """
     Pre-event sync endpoint. A scanning device calls this once before doors
-    open to download every active ticket's TOTP secret for fully offline
+    open to download its own gate's TOTP secrets for fully offline
     validation — see docs/offline-validation.md.
 
     Authenticates with the device's own long-lived token (Work Order 04
-    B4), not a user JWT — replacing Work Order 03's "the event's creator"
-    check now that a real device identity exists. The path's event_id must
-    match the event this device was enrolled for; a device cannot sync any
-    event other than the one it's bound to, which is the gate-partitioning
-    this endpoint can offer today (full per-ticket gate assignment is a
-    larger feature, not built here).
+    B4), not a user JWT. The path's event_id must match the event this
+    device was enrolled for.
+
+    Gate partitioning (Work Order 05 B1): each ticket is deterministically
+    assigned to exactly one of the event's currently-registered gates (a
+    stable hash of ticket_id, modulo the sorted gate list —
+    app/services/gate_partitioning.py) — this device only receives the
+    tickets assigned to *its own* gate, so two offline gates can no longer
+    both admit the same ticket. See that module's docstring for the one
+    real limitation: the assignment reshuffles if the event's gate set
+    changes after a device has already synced.
     """
     if scanner.event_id != event_id:
         raise HTTPException(status_code=403, detail="This device is not enrolled for this event")
@@ -239,6 +249,12 @@ def sync_event_tickets(
     now = datetime.now(timezone.utc)
     scanner.last_sync_at = now
 
+    gate_names = sorted({
+        name for (name,) in db.query(GateScanner.gate_name)
+        .filter(GateScanner.event_id == event_id, GateScanner.status == GateScannerStatus.ACTIVE)
+        .distinct()
+    })
+
     tickets = (
         db.query(Ticket)
         .filter(
@@ -247,6 +263,7 @@ def sync_event_tickets(
         )
         .all()
     )
+    my_tickets = [t for t in tickets if assign_gate(t.id, gate_names) == scanner.gate_name]
 
     db.add(AuditLog(
         actor_id=scanner.account_id,
@@ -264,16 +281,100 @@ def sync_event_tickets(
         "scanner_id": scanner.id,
         "device_id": scanner.device_id,
         "synced_at": now.isoformat(),
-        "ticket_count": len(tickets),
+        "ticket_count": len(my_tickets),
         "tickets": [
             {
                 "id": t.id,
                 "tier_name": t.tier.tier_name if t.tier else None,
                 "seat_number": t.seat_number,
-                "gate_assignment": None,
+                "gate_assignment": scanner.gate_name,
                 "totp_secret": t.totp_secret,
                 "status": t.status.value,
             }
-            for t in tickets
+            for t in my_tickets
         ],
     }
+
+
+# ─── Scan reconciliation (Work Order 05 B5) ─────────────────────────────────
+
+@router.post("/scan-upload", response_model=list[ScanUploadResultItem])
+def upload_scan_batch(
+    body: ScanUploadRequest,
+    scanner: GateScanner = Depends(get_current_scanner),
+    db: Session = Depends(get_db),
+):
+    """
+    Uploads a batch of offline scan decisions once connectivity returns,
+    writing real Attendance rows (Work Order 05 B2's denial_reason makes
+    this a real breakdown by failure type, not just a count).
+
+    Idempotent by ticket_id, not by upload call: a phone retrying an
+    upload must not create duplicate Attendance rows. An ADMITTED scan is
+    idempotent only against *this same scanner* re-uploading the same
+    ticket — if a *different* scanner already admitted this ticket (two
+    gates offline at once, see gate_partitioning.py's limitation, or a
+    gate mis-assignment), that is reported back as a conflict, not
+    silently resolved or overwritten. A DENIED scan is deduplicated
+    against an identical prior row from the same scanner.
+    """
+    results: list[ScanUploadResultItem] = []
+
+    for item in body.scans:
+        if item.granted:
+            existing_admit = (
+                db.query(Attendance)
+                .filter(Attendance.ticket_id == item.ticket_id, Attendance.status == AttendanceStatus.ADMITTED)
+                .first()
+            )
+            if existing_admit:
+                if existing_admit.scanner_id == scanner.id:
+                    results.append(ScanUploadResultItem(ticket_id=item.ticket_id, status="duplicate"))
+                else:
+                    results.append(ScanUploadResultItem(
+                        ticket_id=item.ticket_id,
+                        status="conflict",
+                        detail=(
+                            f"Already admitted by scanner {existing_admit.scanner_id} "
+                            f"at {existing_admit.scan_time.isoformat()}"
+                        ),
+                    ))
+                continue
+
+            db.add(Attendance(
+                ticket_id=item.ticket_id,
+                event_id=scanner.event_id,
+                scanner_id=scanner.id,
+                scan_time=item.scanned_at,
+                status=AttendanceStatus.ADMITTED,
+            ))
+            results.append(ScanUploadResultItem(ticket_id=item.ticket_id, status="recorded"))
+
+        else:
+            existing_denial = (
+                db.query(Attendance)
+                .filter(
+                    Attendance.ticket_id == item.ticket_id,
+                    Attendance.scanner_id == scanner.id,
+                    Attendance.status == AttendanceStatus.DENIED,
+                    Attendance.denial_reason == item.reason_code,
+                    Attendance.scan_time == item.scanned_at,
+                )
+                .first()
+            )
+            if existing_denial:
+                results.append(ScanUploadResultItem(ticket_id=item.ticket_id, status="duplicate"))
+                continue
+
+            db.add(Attendance(
+                ticket_id=item.ticket_id,
+                event_id=scanner.event_id,
+                scanner_id=scanner.id,
+                scan_time=item.scanned_at,
+                status=AttendanceStatus.DENIED,
+                denial_reason=item.reason_code,
+            ))
+            results.append(ScanUploadResultItem(ticket_id=item.ticket_id, status="recorded"))
+
+    db.commit()
+    return results
