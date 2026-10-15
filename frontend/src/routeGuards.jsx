@@ -19,9 +19,28 @@ function Unauthorised({ message }) {
   return <Navigate to="/" replace state={{ from: location, authError: message }} />;
 }
 
-export function RequireOrgMembership() {
-  const { rolesLoaded, roles } = useAuth();
+function RequireLogin({ returnPath }) {
+  return <Navigate to={`/login?return=${encodeURIComponent(returnPath)}`} replace />;
+}
+
+// Work Order 05 A2/A4 — any page that needs a real identity (not just a
+// sufficient role) redirects to the real login screen with its own path
+// preserved in `?return=`, rather than a blank page or a 403.
+export function RequireAuth() {
+  const { isAuthed } = useAuth();
+  const location = useLocation();
   if (usingMockBackend) return <Outlet />;
+  if (!isAuthed) return <RequireLogin returnPath={location.pathname + location.search} />;
+  return <Outlet />;
+}
+
+export function RequireOrgMembership() {
+  const { isAuthed, rolesLoaded, roles } = useAuth();
+  const location = useLocation();
+  if (usingMockBackend) return <Outlet />;
+  // Not logged in at all → /login (A4), distinct from logged in but lacking
+  // the role → "/" with an explanation (unchanged from Work Order 04 C2).
+  if (!isAuthed) return <RequireLogin returnPath={location.pathname + location.search} />;
   if (!rolesLoaded) return null;
   if (roles.organisations.length === 0) {
     return <Unauthorised message="You need to belong to an organisation to access the Organiser Console." />;
@@ -30,8 +49,10 @@ export function RequireOrgMembership() {
 }
 
 export function RequirePlatformAdmin() {
-  const { rolesLoaded, roles } = useAuth();
+  const { isAuthed, rolesLoaded, roles } = useAuth();
+  const location = useLocation();
   if (usingMockBackend) return <Outlet />;
+  if (!isAuthed) return <RequireLogin returnPath={location.pathname + location.search} />;
   if (!rolesLoaded) return null;
   if (!roles.isPlatformAdmin) {
     return <Unauthorised message="Platform admin access is required for that page." />;

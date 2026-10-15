@@ -4,7 +4,7 @@
 // UI work between now and re-enabling it should keep this file's shape in
 // sync with src/mock/mockApi.js so the swap stays a one-line change.
 import { ApiError } from "../errors";
-import { getToken } from "../auth-storage";
+import { getToken, clearToken } from "../auth-storage";
 import { getDeviceToken } from "../scanner/deviceAuth";
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000/api/v1";
@@ -29,13 +29,41 @@ async function _send(path, { method, body, headers }) {
   return data;
 }
 
+// Work Order 05 A4 — a 401 on an authenticated user request means the
+// session is gone (expired/invalid token), not that this one call failed.
+// Handled here, once, rather than in every page that calls request(): clear
+// the stale token and send the user to /login with their place in the app
+// preserved, instead of a page showing a confusing raw error (or several,
+// if more than one request was in flight). A fresh login attempt (and
+// /dev/otp-inbox, auth:false calls) must never trigger this — only an
+// *authenticated* call going suddenly unauthenticated means the session
+// expired.
+function handleExpiredSession() {
+  clearToken();
+  if (!window.location.pathname.startsWith("/login")) {
+    const returnTo = encodeURIComponent(window.location.pathname + window.location.search);
+    window.location.href = `/login?return=${returnTo}`;
+  }
+}
+
 async function request(path, { method = "GET", body, auth = true } = {}) {
   const headers = { "Content-Type": "application/json" };
+  let hadToken = false;
   if (auth) {
     const token = getToken();
-    if (token) headers.Authorization = `Bearer ${token}`;
+    if (token) {
+      headers.Authorization = `Bearer ${token}`;
+      hadToken = true;
+    }
   }
-  return _send(path, { method, body, headers });
+  try {
+    return await _send(path, { method, body, headers });
+  } catch (err) {
+    if (hadToken && err instanceof ApiError && err.status === 401) {
+      handleExpiredSession();
+    }
+    throw err;
+  }
 }
 
 // A gate device authenticates with its own long-lived device token, never
@@ -61,7 +89,13 @@ function notImplemented(name) {
 export const liveApi = {
   health: () => fetch(`${BASE_URL.replace(/\/api\/v1$/, "")}/`).then((r) => r.json()),
 
+  // DEV/TEST ONLY — the backend 404s this outside APP_ENV=development
+  // (Work Order 05 A1). Kept only so nothing importing it directly breaks;
+  // the real app calls requestOtp/verifyOtp below via Login.jsx.
   login: (phone_number) => request("/auth/login", { method: "POST", body: { phone_number }, auth: false }),
+  requestOtp: (phone_number) => request("/auth/request-otp", { method: "POST", body: { phone_number }, auth: false }),
+  verifyOtp: (phone_number, otp_code) =>
+    request("/auth/verify-otp", { method: "POST", body: { phone_number, otp_code }, auth: false }),
   me: () => request("/auth/me"),
   // Work Order 04 C1 — AuthContext fetches this right after login to know
   // which organisations (and at which role) this user can manage.
