@@ -7,7 +7,7 @@ import { useApiData } from "../../lib/useApiData";
 import {
   TimelineStepper, Card, MoneyText, Input, Checkbox, Button, Modal, CountdownRing, Skeleton, ErrorState,
 } from "../../components/ui";
-import { isValidKenyanPhone, normalizeKenyanPhone, maskPhone } from "../../format";
+import { isValidKenyanPhone, normalizeKenyanPhone, maskPhone, formatPhone } from "../../format";
 
 const MAX_QUANTITY = 10;
 
@@ -22,10 +22,14 @@ export default function Checkout() {
   const [params] = useSearchParams();
   const tierId = params.get("tier");
   const navigate = useNavigate();
-  const { login } = useAuth();
+  const { user } = useAuth();
 
   const { data: event, error: eventError, retry: retryEvent } = useApiData(() => api.getEvent(eventId), [eventId]);
-  const [phone, setPhone] = useState("");
+  // Pre-filled from the already-logged-in user (Work Order 05 A2 — identity
+  // is established at /login now, not here) but still editable: the M-Pesa
+  // number being charged doesn't have to be the same number the account is
+  // registered under.
+  const [phone, setPhone] = useState(() => (user?.phoneNumber ? formatPhone(user.phoneNumber) : ""));
   const [phoneError, setPhoneError] = useState(null);
   const [agreed, setAgreed] = useState(false);
   const [step, setStep] = useState(0); // 0 Details, 1 Payment
@@ -86,9 +90,8 @@ export default function Checkout() {
     setError(null);
     setSubmitting(true);
     try {
-      // No separate login screen for attendees (spec.md §3 never lists one) —
-      // the checkout phone number *is* how identity is established.
-      await login(normalizeKenyanPhone(phone));
+      // Identity is already established — RequireAuth (Work Order 05 A2/A4)
+      // guards this whole route, so getting here means the user is logged in.
       const res = await api.purchaseTicket({
         event_id: event.id,
         tier_id: tier.id,

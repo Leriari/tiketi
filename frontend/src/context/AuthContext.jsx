@@ -45,8 +45,9 @@ export function AuthProvider({ children }) {
     if (user && getToken()) refreshRoles();
   }, []); // eslint-disable-line react-hooks/exhaustive-deps -- once, on mount
 
-  const login = useCallback(async (phoneNumber) => {
-    const data = await api.login(phoneNumber);
+  // Shared by both auth paths below — a TokenResponse-shaped result
+  // ({access_token, user_id, phone_number}) is all either one produces.
+  const completeAuth = useCallback(async (data) => {
     setToken(data.access_token);
     const nextUser = { id: data.user_id, phoneNumber: data.phone_number };
     localStorage.setItem("tiketi_user", JSON.stringify(nextUser));
@@ -54,6 +55,21 @@ export function AuthProvider({ children }) {
     await refreshRoles();
     return nextUser;
   }, [refreshRoles]);
+
+  // Mock-mode only in practice — the real backend 404s /auth/login outside
+  // development (Work Order 05 A1). Kept because mockApi's login has no OTP
+  // concept at all, and frontend/src/mock/ isn't touched by this work order.
+  const login = useCallback(async (phoneNumber) => {
+    const data = await api.login(phoneNumber);
+    return completeAuth(data);
+  }, [completeAuth]);
+
+  // The real login path (Work Order 05 A2) — Login.jsx calls this after a
+  // successful verify-otp.
+  const loginWithOtp = useCallback(async (phoneNumber, otpCode) => {
+    const data = await api.verifyOtp(phoneNumber, otpCode);
+    return completeAuth(data);
+  }, [completeAuth]);
 
   const logout = useCallback(() => {
     clearToken();
@@ -65,7 +81,7 @@ export function AuthProvider({ children }) {
   const isAuthed = Boolean(user && getToken());
 
   return (
-    <AuthContext.Provider value={{ user, isAuthed, roles, rolesLoaded, login, logout }}>
+    <AuthContext.Provider value={{ user, isAuthed, roles, rolesLoaded, login, loginWithOtp, logout }}>
       {children}
     </AuthContext.Provider>
   );

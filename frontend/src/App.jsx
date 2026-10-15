@@ -1,10 +1,11 @@
 import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
 import ScrollToTop from "./ScrollToTop";
 import AuthErrorToast from "./AuthErrorToast";
-import { RequireOrgMembership, RequirePlatformAdmin, RequireDeviceToken } from "./routeGuards";
+import { RequireAuth, RequireOrgMembership, RequirePlatformAdmin, RequireDeviceToken } from "./routeGuards";
 import { AuthProvider } from "./context/AuthContext";
 import { ToastProvider } from "./components/ui/Toast";
 import { ThemeProvider } from "./theme/ThemeProvider";
+import Login from "./pages/Login";
 import AttendeeShell from "./shells/AttendeeShell";
 import Landing from "./pages/attendee/Landing";
 import Browse from "./pages/attendee/Browse";
@@ -88,28 +89,41 @@ export default function App() {
               }
             />
 
+            <Route
+              path="/login"
+              element={
+                <ThemeProvider surfaceDefault="dark">
+                  <Login />
+                </ThemeProvider>
+              }
+            />
+
             <Route element={<AttendeeShell />}>
               <Route path="/" element={<Landing />} />
               <Route path="/events" element={<Browse />} />
               <Route path="/events/:eventId" element={<EventDetail />} />
-              <Route path="/checkout/:eventId" element={<Checkout />} />
-              <Route path="/confirmation/:ticketId" element={<Confirmation />} />
-              <Route path="/tickets" element={<MyTickets />} />
-              <Route path="/tickets/:ticketId" element={<TicketCredential />} />
-              <Route path="/account" element={<Account />} />
+              <Route element={<RequireAuth />}>
+                <Route path="/checkout/:eventId" element={<Checkout />} />
+                <Route path="/confirmation/:ticketId" element={<Confirmation />} />
+                <Route path="/tickets" element={<MyTickets />} />
+                <Route path="/tickets/:ticketId" element={<TicketCredential />} />
+                <Route path="/account" element={<Account />} />
+              </Route>
             </Route>
 
-            <Route path="/seller" element={<SellerShell />}>
-              <Route index element={<SellerDashboard />} />
-              <Route path="sell" element={<SellWizard />} />
-              <Route path="listings" element={<MyListings />} />
-              <Route path="sold" element={<SoldHistory />} />
-              <Route path="wallet" element={<SellerWallet />} />
-              <Route path="payouts" element={<PayoutHistory />} />
-              <Route path="help" element={<Help />} />
-              <Route path="contact" element={<Contact />} />
-              <Route path="disputes" element={<DisputeCentre />} />
-              <Route path="profile" element={<SellerProfile />} />
+            <Route element={<RequireAuth />}>
+              <Route path="/seller" element={<SellerShell />}>
+                <Route index element={<SellerDashboard />} />
+                <Route path="sell" element={<SellWizard />} />
+                <Route path="listings" element={<MyListings />} />
+                <Route path="sold" element={<SoldHistory />} />
+                <Route path="wallet" element={<SellerWallet />} />
+                <Route path="payouts" element={<PayoutHistory />} />
+                <Route path="help" element={<Help />} />
+                <Route path="contact" element={<Contact />} />
+                <Route path="disputes" element={<DisputeCentre />} />
+                <Route path="profile" element={<SellerProfile />} />
+              </Route>
             </Route>
 
             <Route element={<RequireOrgMembership />}>
