@@ -531,9 +531,13 @@ class GateScanner(Base):
 
 
 class Attendance(Base):
-    """A single scan attempt at the gate, admitted or denied. Not yet wired to any route —
-    today's gate.py still mutates Ticket.status/used_at directly; this table will record the
-    fact of the attempt separately once gate-scanner device registration exists (Phase 2)."""
+    """A single scan attempt at the gate, admitted or denied. Wired via
+    POST /gate/scan-upload (Work Order 05 B5) — the offline scanner's
+    reconciliation endpoint, written once connectivity returns. /gate/scan
+    (the real-time cloud path) still mutates Ticket.status/used_at
+    directly and does not write here; this table is specifically the
+    offline device's own record of what it decided, for reconciliation
+    and the evaluation metrics in Chapter 5."""
     __tablename__ = "attendances"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -543,6 +547,10 @@ class Attendance(Base):
 
     scan_time: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     status: Mapped[AttendanceStatus] = mapped_column(SAEnum(AttendanceStatus), nullable=False)
+    # One of validate.js's REASON codes (UNKNOWN_TICKET, BAD_OTP,
+    # ALREADY_ADMITTED, WRONG_GATE, INVALID_FORMAT) — null for an admitted
+    # scan, since there's nothing to explain (Work Order 05 B2).
+    denial_reason: Mapped[str | None] = mapped_column(String(30))
 
 
 class AuditLog(Base):
