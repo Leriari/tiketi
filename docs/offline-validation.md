@@ -1,5 +1,17 @@
 # Offline gate validation — design (Work Order 03)
 
+> **Status (Work Order 05, Blocks A–B):** the device authorisation model and
+> the sync payload described below are from Work Order 03's original design
+> and are now superseded in two ways. Work Order 04 B4 replaced the
+> "caller must be the event's creator" JWT check with real scanner device
+> tokens (register → enrol → long-lived token; see
+> `app/core/authz.py::get_current_scanner`). Work Order 05 B1 added real
+> per-ticket gate partitioning on top of that. The historical sections below
+> are kept for the reasoning they record; **"Gate authorization model" and
+> "The sync payload"'s request/response shapes are out of date** — see
+> "Gate partitioning (Work Order 05 B1)" and "Scan reconciliation (Work
+> Order 05 B5)" further down for what's actually true today.
+
 ## Why this exists
 
 The project's design states gate validation runs entirely on the scanning device,
@@ -52,18 +64,11 @@ Behaviour:
 2. Writes an `AuditLog` row (`action_type="gate_sync"`) — unchanged from before.
 3. Returns every `ACTIVE` ticket for the event, in the shape below.
 
-**No per-ticket gate assignment exists in the real schema** (the mock's
-`ticket.gate_assignment` string has no backend equivalent — `Ticket.gate_scanner_id`
-records which device scanned a ticket *in*, after the fact, not a pre-assignment to a
-specific gate). So for now, every device registered for an event receives the
-**same, full set** of that event's active tickets — "partitioning" in this work order
-means *device-level authorization* (only a registered device for this event can sync
-at all), not yet *ticket-level* partitioning across multiple simultaneous gates. Real
-per-ticket gate assignment (so two gates offline at once can't both admit the same
-ticket) is a distinct, larger feature and is called out as a limitation in Block B's
-partitioning doc, not solved here.
+**No per-ticket gate assignment existed in the real schema as of Work Order 03** —
+now built, see "Gate partitioning (Work Order 05 B1)" below. The request/response
+shapes immediately following this paragraph are the original, now-superseded ones.
 
-**Response:**
+**Response (historical — see B1 below for the current shape):**
 
 ```jsonc
 {
@@ -95,7 +100,7 @@ partitioning doc, not solved here.
 | 1 | Format & integrity | Payload parses as `TIKETI:<ticket_id>:<otp>`; `ticket_id` exists in the synced cache for this event |
 | 2 | TOTP window | `tickets[].totp_secret`, base32-decoded to raw bytes, HMAC-SHA1 via Web Crypto, RFC 6238, 30s step, current window ±1 (matches `totp_service.verify_otp`'s `valid_window=1` exactly — a 90-second acceptance range) |
 | 3 | Prior admission | The device's own local admissions store (IndexedDB) — has this ticket already been granted *on this device* since sync — not the synced `status` field, which only reflects state at sync time |
-| 4 | Gate assignment | `tickets[].gate_assignment` — always null today (see above), so this check currently always passes; wired for forward compatibility once real per-ticket assignment exists |
+| 4 | Gate assignment | `tickets[].gate_assignment` — now always equal to this device's own gate (Work Order 05 B1: a device only ever receives tickets already assigned to it), so this check passes trivially in the normal flow. A ticket assigned to a *different* gate was never synced to this device at all, so it surfaces via check 1 (`UNKNOWN_TICKET`), not this one — `WRONG_GATE` stays defined in validate.js (unchanged, per rule 3) as defence in depth, not dead code to remove |
 
 ## Credential lifecycle
 
@@ -120,15 +125,42 @@ A structured verdict, not a boolean — these become the evaluation categories:
 | `UNKNOWN_TICKET` | `ticket_id` not present in this device's synced cache |
 | `BAD_OTP` | Parses fine, but no accepted window produces this code |
 | `ALREADY_ADMITTED` | Found in this device's local admissions store |
-| `WRONG_GATE` | `gate_assignment` set and doesn't match this device's gate (currently unreachable — see above) |
+| `WRONG_GATE` | `gate_assignment` set and doesn't match this device's gate — defined but effectively unreachable under real partitioning (see check 4 above); a mismatched ticket now shows as `UNKNOWN_TICKET` instead |
 
-## Block B (not built in Block A)
+## Gate partitioning (Work Order 05 B1)
 
-- **B2 reconciliation**: uploads write to the real `Attendance` table (currently
-  zero rows, no routes). That table has no column for *why* a denial happened — only
-  `status` (`admitted`/`denied`). Denial reason codes stay in the upload payload and
-  the response, but are not persisted per-row unless a future migration adds one;
-  noted here rather than silently dropped.
-- **B3 partitioning**: documented above as a real limitation — a ticket holder can
-  only be *authorized to admit* via any device registered for the event, not
-  restricted to one specific gate, until real per-ticket assignment exists.
+`app/services/gate_partitioning.py`: `assign_gate(ticket_id, sorted_gate_names)` — a
+stable SHA-256 hash of `ticket_id`, modulo the event's current, alphabetically sorted
+list of registered gate names. Computed fresh on every sync, not stored. Purchase-time
+assignment was the alternative and was rejected: gates (`GateScanner` rows) are
+typically registered close to the event, often after most tickets have already sold
+(Work Order 04 B4's enrolment flow), so there would usually be no gates to assign to
+yet at purchase time.
+
+`GET /gate/sync-event/{event_id}` (now device-token authenticated — see the status
+note at the top of this document) computes every active ticket's assigned gate and
+returns **only the ones matching the requesting device's own gate**, with
+`gate_assignment` echoing that gate's real name instead of always `null`.
+
+**The one real limitation, stated plainly**: the assignment is only stable for as
+long as the event's registered-gate set doesn't change. Registering a new gate (or
+deactivating one) after some devices have already synced changes the modulo base,
+which reshuffles every ticket's assignment on the next sync. A device that synced
+before the change keeps serving its stale assignment until it re-syncs. This is a
+known property of a computed-not-stored scheme, not an oversight — organisers should
+register all of an event's gates before any device syncs, not add one mid-event.
+
+## Scan reconciliation (Work Order 05 B5)
+
+`POST /gate/scan-upload` (device-token authenticated): uploads a batch of offline
+decisions, writing real `Attendance` rows with `denial_reason` populated for denials.
+
+Idempotent by `ticket_id`, not by upload call — phones retry, and a naive "insert
+every row" would corrupt the evaluation data with duplicates:
+- An **admit** retried by the *same* scanner is a no-op (`"duplicate"`).
+- An **admit** for a ticket already admitted by a *different* scanner (two gates
+  offline at once, or a partitioning edge case from the limitation above) is reported
+  as `"conflict"`, with the original scanner id and time — never silently merged or
+  overwritten. This is deliberate: the work order treats that situation as a finding
+  worth reporting in Chapter 5, not an error to make disappear.
+- A **denial** retried with the same ticket/scanner/reason/timestamp is deduplicated.
