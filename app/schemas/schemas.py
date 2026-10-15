@@ -350,6 +350,25 @@ class ScannerEnrollResponse(BaseModel):
     gate_name: str
 
 
+# ─── Scan reconciliation (Work Order 05 B5) ───────────────────────────────────
+
+class ScanUploadItem(BaseModel):
+    ticket_id: str
+    granted: bool
+    reason_code: str  # one of validate.js's REASON codes
+    scanned_at: datetime  # the device's own local time of the scan
+
+
+class ScanUploadRequest(BaseModel):
+    scans: list[ScanUploadItem]
+
+
+class ScanUploadResultItem(BaseModel):
+    ticket_id: str
+    status: str  # "recorded" | "duplicate" | "conflict"
+    detail: Optional[str] = None
+
+
 class TicketSeedResponse(BaseModel):
     """Returned to the authenticated ticket app — contains the TOTP secret."""
     ticket_id: str
