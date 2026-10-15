@@ -192,6 +192,23 @@ def test_app_refuses_to_start_with_inbox_channel_outside_development():
         )
 
 
+# ── Work Order 05 A1: /auth/login closed outside development ────────────────
+
+def test_login_404s_when_not_development(monkeypatch):
+    from app.core.config import get_settings
+    import app.api.routes.auth as auth_route
+
+    monkeypatch.setenv("APP_ENV", "production")
+    get_settings.cache_clear()
+    monkeypatch.setattr(auth_route, "settings", get_settings())
+    try:
+        res = client.post("/api/v1/auth/login", json={"phone_number": "0788000007"})
+        assert res.status_code == 404
+    finally:
+        get_settings.cache_clear()
+        monkeypatch.setattr(auth_route, "settings", get_settings())
+
+
 def test_app_starts_fine_with_inbox_channel_in_development():
     from app.core.config import Settings
 
