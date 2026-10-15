@@ -1,0 +1,56 @@
+{
+  "generatedAt": "2026-10-15T08:53:39.138Z",
+  "results": [
+    {
+      "scale": 100,
+      "totalValidated": 100,
+      "correctAccepts": 70,
+      "correctRejects": 30,
+      "falseAccepts": 0,
+      "falseRejects": 0,
+      "accuracyPercent": 100,
+      "meanValidationMs": 1.450478,
+      "p95ValidationMs": 1.2059,
+      "rejectReasonBreakdown": {
+        "BAD_OTP": 10,
+        "ALREADY_ADMITTED": 10,
+        "UNKNOWN_TICKET": 5,
+        "INVALID_FORMAT": 5
+      }
+    },
+    {
+      "scale": 1000,
+      "totalValidated": 1000,
+      "correctAccepts": 700,
+      "correctRejects": 300,
+      "falseAccepts": 0,
+      "falseRejects": 0,
+      "accuracyPercent": 100,
+      "meanValidationMs": 0.3853648000000001,
+      "p95ValidationMs": 0.7246,
+      "rejectReasonBreakdown": {
+        "BAD_OTP": 100,
+        "ALREADY_ADMITTED": 100,
+        "UNKNOWN_TICKET": 50,
+        "INVALID_FORMAT": 50
+      }
+    },
+    {
+      "scale": 5000,
+      "totalValidated": 5000,
+      "correctAccepts": 3500,
+      "correctRejects": 1500,
+      "falseAccepts": 0,
+      "falseRejects": 0,
+      "accuracyPercent": 100,
+      "meanValidationMs": 1.3903147800000002,
+      "p95ValidationMs": 2.8712,
+      "rejectReasonBreakdown": {
+        "BAD_OTP": 500,
+        "ALREADY_ADMITTED": 500,
+        "UNKNOWN_TICKET": 250,
+        "INVALID_FORMAT": 250
+      }
+    }
+  ]
+}
