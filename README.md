@@ -384,11 +384,11 @@ Frontend scanner logic has its own Vitest tests (`cd frontend && npm test`).
 
 | Phase | Status | Description |
 |-------|--------|-------------|
-| **1** | 🟡 **Partial** | Core flow works (OTP auth, organisations + roles, events, M-Pesa purchase, TOTP QR, resale, scanner devices, partitioned offline sync, scan reconciliation). Price-cap history and audit log are still unwired, and there is no real SMS gateway |
-| **1.5** | 🟡 **Partial** | Frontend: 5 full UI surfaces built (`frontend/`). Login, Attendee, Seller, Organiser Console and Scanner run against the real backend; Platform Admin is still mock-only. See "What's real vs. what's a mock" above |
-| **2** | 🟡 **Partial** | `contracts/TiketiNFT.sol` (ERC-721 + ERC-2981) is written, tested (29 passing), and verified end-to-end against a local chain. Backend minting (`app/services/web3_service.py`) is wired in. **Not yet deployed to Base Sepolia** — needs a funded wallet + RPC, see `contracts/README` below |
-| **3** | 🔜 Planned | Flutter ticket viewer app, Android scanner app |
-| **4** | 🔜 Planned | Local Wi-Fi mesh server, offline dry-run testing, pilot event |
+| **1** |  **Partial** | Core flow works (auth, events, M-Pesa purchase, TOTP QR, gate scan) — but only 6 of the schema's 14 tables have routes; organizer accounts, gate-scanner registration, resale/transfers, and audit/notification tables are still unwired |
+| **1.5** | Done | Frontend: 5 full UI surfaces built (`frontend/`), currently mock-API only — see "What's real vs. what's a mock" above |
+| **2** | **Partial** | `contracts/TiketiNFT.sol` (ERC-721 + ERC-2981) is written, tested (29 passing), and verified end-to-end against a local chain. Backend minting (`app/services/web3_service.py`) is wired in. **Not yet deployed to Base Sepolia** — needs a funded wallet + RPC, see `contracts/README` below |
+| **3** | Planned | Flutter ticket viewer app, Android scanner app |
+| **4** | Planned | Local Wi-Fi mesh server, offline dry-run testing, pilot event |
 
 ### Blockchain (contracts/)
 
