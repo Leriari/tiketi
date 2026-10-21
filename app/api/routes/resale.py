@@ -17,7 +17,7 @@ mapped down to whichever of the six UI values is the closest honest match.
 See the Work Order 02 completion report for the full mapping rationale.
 """
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
@@ -26,7 +26,7 @@ from app.db.session import get_db
 from app.models.models import (
     Ticket, TicketStatus, Transfer, TransferStatus, TransferType,
     Payment, PaymentStatus, WalletTransaction, WalletTransactionType,
-    WalletTransactionStatus, User,
+    WalletTransactionStatus, User, AuditLog, EventStatus,
 )
 from app.schemas.schemas import (
     ResaleListingCreate, ResaleRepriceRequest, ResaleBuyRequest, ResaleWithdrawRequest,
@@ -51,6 +51,89 @@ _FRONTEND_STATUS = {
 }
 
 _SETTLED_STATUSES = (TransferStatus.PAID, TransferStatus.COMPLETED, TransferStatus.SETTLEMENT_FAILED)
+
+
+# ── Buying: what's for sale, and purchases that never completed ──────────────
+
+# A buyer who never finishes the M-Pesa prompt would otherwise hold the
+# listing in PENDING_PAYMENT forever. STK prompts expire on the phone within
+# a couple of minutes; this leaves room for a slow callback.
+RESALE_PAYMENT_TIMEOUT = timedelta(minutes=5)
+_PUBLIC_EVENT_STATUSES = (EventStatus.PUBLISHED, EventStatus.SOLD_OUT)
+
+
+def _release_stale_purchases(db: Session) -> None:
+    """Put listings whose buyer never paid back on sale. Runs lazily
+    whenever listings are read or bought, so no scheduler is needed."""
+    cutoff = datetime.utcnow() - RESALE_PAYMENT_TIMEOUT
+    stale = (
+        db.query(Transfer)
+        .join(Payment, Transfer.payment_id == Payment.id)
+        .filter(
+            Transfer.status == TransferStatus.PENDING_PAYMENT,
+            Payment.status == PaymentStatus.INITIATED,
+            Payment.initiated_at < cutoff,
+        )
+        .all()
+    )
+    for transfer in stale:
+        transfer.payment.status = PaymentStatus.TIMEOUT
+        transfer.payment.failure_reason = "The M-Pesa payment wasn't completed in time."
+        transfer.status = TransferStatus.LISTED
+        transfer.buyer_id = None
+        transfer.payment_id = None
+    if stale:
+        db.commit()
+
+
+def _buy_block_reason(transfer: Transfer) -> str | None:
+    """Why this listing can't be bought right now (beyond its own status),
+    or None. Applies the organiser's resale settings at purchase time too."""
+    event = transfer.event
+    if not event or event.status not in _PUBLIC_EVENT_STATUSES:
+        return "This event isn't on sale right now"
+    now = datetime.utcnow()
+    if event.event_date <= now:
+        return "This event has already started"
+    if event.resale_enabled is False:
+        return "The organiser has turned off resale for this event"
+    if event.resale_window_close_hours and now > event.event_date - timedelta(hours=event.resale_window_close_hours):
+        return f"Resale closed {event.resale_window_close_hours} hour(s) before the event"
+    return None
+
+
+# ── Organiser resale rules (Organiser Console → Event Management) ───────────
+
+def _resale_rule_reason(ticket: Ticket) -> str | None:
+    """Why the organiser's resale settings block listing this ticket right
+    now, or None. Naive-UTC comparisons, same reasoning as _eligible_ticket."""
+    event = ticket.event
+    if not event:
+        return None
+    if event.resale_enabled is False:
+        return "The organiser has turned off resale for this event"
+    now = datetime.utcnow()
+    if event.resale_window_open_days and ticket.purchased_at:
+        opens_at = ticket.purchased_at.replace(tzinfo=None) + timedelta(days=event.resale_window_open_days)
+        if now < opens_at:
+            return f"Resale opens {event.resale_window_open_days} day(s) after purchase"
+    if event.resale_window_close_hours and event.event_date:
+        if now > event.event_date - timedelta(hours=event.resale_window_close_hours):
+            return f"Resale closed {event.resale_window_close_hours} hour(s) before the event"
+    return None
+
+
+def _log_rejected_listing(db: Session, user_id: str, ticket: Ticket, price_kes: float, message: str) -> None:
+    """Record a chain-rejected listing price so the organiser's Resale
+    Compliance page counts real blocked attempts, not a guess."""
+    db.add(AuditLog(
+        actor_id=user_id,
+        action_type="resale_rejected_above_cap" if "cap" in message.lower() else "resale_rejected",
+        target_id=ticket.event_id,
+        target_type="event",
+        details=f"ticket={ticket.id} price_kes={int(round(price_kes))} reason={message}",
+    ))
+    db.commit()
 
 
 # ── Serialization helpers ───────────────────────────────────────────────────
@@ -103,7 +186,10 @@ def _serialize_listing(transfer: Transfer) -> dict:
         "event_title": event.title if event else None,
         "event_date": event.event_date if event else None,
         "venue": event.venue if event else None,
+        "category": event.category if event else None,
+        "image_url": event.image_url if event else None,
         "tier_name": tier.tier_name if tier else None,
+        "face_value_kes": tier.price_kes if tier else None,
         "resale_floor_kes": tier.resale_floor_price_kes if tier else 0.0,
         "resale_ceiling_kes": tier.resale_ceiling_price_kes if tier else 0.0,
         "checked_in": ticket.status == TicketStatus.USED if ticket else False,
@@ -125,6 +211,8 @@ def _eligible_ticket(ticket: Ticket) -> dict:
         # Naive comparison deliberately — event_date round-trips through
         # SQLite as naive, and comparing it against an aware "now" raises.
         reason = "Event has ended"
+    else:
+        reason = _resale_rule_reason(ticket)
 
     return {
         "ticket_id": ticket.id,
@@ -132,10 +220,8 @@ def _eligible_ticket(ticket: Ticket) -> dict:
         "event_title": event.title if event else None,
         "venue": event.venue if event else None,
         "event_date": event.event_date if event else None,
-        # No "category" concept exists in this schema (Event has no such
-        # column) — a fixed default rather than a schema change for a
-        # purely decorative field. See the completion report.
-        "category": "general",
+        "category": (event.category if event and event.category else "general"),
+        "image_url": event.image_url if event else None,
         "tier_name": tier.tier_name if tier else None,
         "floor": tier.resale_floor_price_kes if tier else 0.0,
         "ceiling": tier.resale_ceiling_price_kes if tier else 0.0,
@@ -223,11 +309,15 @@ def create_listing(
         raise HTTPException(status_code=400, detail="This ticket isn't active")
     if not ticket.nft_token_id:
         raise HTTPException(status_code=409, detail="This ticket hasn't finished minting yet — try again shortly")
+    rule_reason = _resale_rule_reason(ticket)
+    if rule_reason:
+        raise HTTPException(status_code=400, detail=rule_reason)
 
     # The chain, not this function, decides whether the price is allowed.
     try:
         tx_hash = web3_service.list_for_resale_onchain(ticket.nft_token_id, int(round(body.price_kes)))
     except web3_service.ContractRevertError as e:
+        _log_rejected_listing(db, current_user.id, ticket, body.price_kes, str(e))
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
@@ -251,23 +341,72 @@ def create_listing(
 # ── Browse / view ────────────────────────────────────────────────────────────
 
 @router.get("/listings")
-def browse_listings(event_id: str | None = None, db: Session = Depends(get_db)):
+def browse_listings(event_id: str | None = None, sort: str = "price", db: Session = Depends(get_db)):
+    """Listings a buyer can actually buy right now: on sale, for a public
+    event that hasn't started, with resale open. sort: price | newest | date."""
+    _release_stale_purchases(db)
     query = db.query(Transfer).filter(Transfer.status == TransferStatus.LISTED)
     if event_id:
         query = query.filter(Transfer.event_id == event_id)
-    transfers = query.order_by(Transfer.created_at.desc()).all()
+    transfers = [t for t in query.all() if _buy_block_reason(t) is None]
+    if sort == "newest":
+        transfers.sort(key=lambda t: t.created_at, reverse=True)
+    elif sort == "date":
+        transfers.sort(key=lambda t: (t.event.event_date, t.asking_price_kes))
+    else:
+        transfers.sort(key=lambda t: (t.asking_price_kes, t.created_at))
     return [_serialize_listing(t) for t in transfers]
 
 
 @router.get("/listings/{listing_id}")
 def get_listing(listing_id: str, db: Session = Depends(get_db)):
+    _release_stale_purchases(db)
     transfer = db.query(Transfer).filter(Transfer.id == listing_id).first()
     if not transfer:
         raise HTTPException(status_code=404, detail="Listing not found")
     transfer.views += 1
     db.commit()
     db.refresh(transfer)
-    return _serialize_listing(transfer)
+    data = _serialize_listing(transfer)
+    reason = _buy_block_reason(transfer) if transfer.status == TransferStatus.LISTED else "This ticket is no longer available"
+    data["buyable"] = reason is None
+    data["unavailable_reason"] = reason
+    return data
+
+
+@router.get("/purchases/{payment_id}")
+def get_resale_purchase(payment_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    """
+    A buyer's view of their resale purchase, polled after paying. Paying
+    isn't the end: the ticket moves to the buyer once the on-chain
+    settlement finishes (app/worker.py settle_resale_transfer).
+
+    status: awaiting_payment | failed | transferring | complete | delayed
+    """
+    _release_stale_purchases(db)
+    payment = db.query(Payment).filter(Payment.id == payment_id, Payment.user_id == current_user.id).first()
+    if not payment:
+        raise HTTPException(status_code=404, detail="Purchase not found")
+    transfer = db.query(Transfer).filter(Transfer.payment_id == payment.id).first()
+
+    if payment.status in (PaymentStatus.FAILED, PaymentStatus.TIMEOUT) or (payment.status == PaymentStatus.INITIATED and not transfer):
+        status_ = "failed"
+    elif payment.status == PaymentStatus.INITIATED:
+        status_ = "awaiting_payment"
+    elif transfer and transfer.status == TransferStatus.COMPLETED:
+        status_ = "complete"
+    elif transfer and transfer.status == TransferStatus.SETTLEMENT_FAILED:
+        status_ = "delayed"
+    else:
+        status_ = "transferring"
+
+    return {
+        "payment_id": payment.id,
+        "status": status_,
+        "failure_reason": payment.failure_reason if status_ == "failed" else None,
+        "ticket_id": transfer.ticket_id if transfer and status_ == "complete" else None,
+        "listing": _serialize_listing(transfer) if transfer else None,
+    }
 
 
 # ── Seller-owned listing management ─────────────────────────────────────────
@@ -365,6 +504,7 @@ def reprice_listing(
     try:
         tx_hash = web3_service.list_for_resale_onchain(ticket.nft_token_id, int(round(body.price_kes)))
     except web3_service.ContractRevertError as e:
+        _log_rejected_listing(db, current_user.id, ticket, body.price_kes, str(e))
         raise HTTPException(status_code=400, detail=str(e))
 
     transfer.asking_price_kes = round(body.price_kes)
@@ -392,15 +532,35 @@ async def buy_listing(
     send the STK push, return immediately — the callback (app/api/routes/
     payments.py's mpesa_callback / dev-confirm) does the rest.
     """
+    _release_stale_purchases(db)
     transfer = db.query(Transfer).filter(Transfer.id == listing_id).first()
     if not transfer:
         raise HTTPException(status_code=404, detail="Listing not found")
+    # The same buyer retrying (their M-Pesa prompt timed out, they tapped
+    # Resend) replaces their own unfinished attempt rather than being
+    # locked out of a listing they're holding.
+    previous = transfer.payment
+    if (
+        transfer.status == TransferStatus.PENDING_PAYMENT
+        and transfer.buyer_id == current_user.id
+        and previous is not None
+        and previous.status == PaymentStatus.INITIATED
+    ):
+        previous.status = PaymentStatus.TIMEOUT
+        previous.failure_reason = "Replaced by a new payment attempt."
+        transfer.status = TransferStatus.LISTED
+        transfer.buyer_id = None
+        transfer.payment_id = None
+        db.flush()
     if transfer.status != TransferStatus.LISTED:
         # Covers both "someone else is already mid-purchase" and any other
         # non-buyable state — the second buyer is rejected, not queued.
         raise HTTPException(status_code=409, detail="This listing is no longer available")
     if transfer.seller_id == current_user.id:
         raise HTTPException(status_code=400, detail="You cannot buy your own listing")
+    reason = _buy_block_reason(transfer)
+    if reason:
+        raise HTTPException(status_code=400, detail=reason)
 
     payment = Payment(
         ticket_id=transfer.ticket_id,

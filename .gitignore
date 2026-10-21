@@ -45,3 +45,10 @@ contracts/node_modules/
 contracts/artifacts/
 contracts/cache/
 contracts/.env
+
+# Deployment — generated secrets and server-side backups never go in git
+deploy/.env.production
+deploy/backups/
+*.db.bak*
+frontend/.env.production.local
+frontend/.firebase/

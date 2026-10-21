@@ -15,7 +15,8 @@ export default function ThemeToggle({ className }) {
         "inline-flex items-center gap-1.5 rounded-sm px-2.5 py-1.5 text-body-sm text-ink-secondary hover:bg-surface-elevated hover:text-ink-primary transition-colors duration-150",
         className
       )}
-      aria-label={`Switch to ${isDark ? "light" : "dark"} theme`}
+      // Starts with the visible word so voice control ("click Dark") works.
+      aria-label={`${isDark ? "Dark" : "Light"} theme, switch to ${isDark ? "light" : "dark"}`}
     >
       {isDark ? <Moon size={16} /> : <Sun size={16} />}
       {isDark ? "Dark" : "Light"}

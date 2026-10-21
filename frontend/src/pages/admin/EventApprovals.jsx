@@ -4,7 +4,7 @@ import { api, ApiError } from "../../api";
 import { useApiData } from "../../lib/useApiData";
 import { useToast } from "../../components/ui/Toast";
 import { Card, Badge, Button, Modal, Textarea, MoneyText, EmptyState, ErrorState, Skeleton } from "../../components/ui";
-import { categoryGradient } from "../../lib/categoryGradient";
+import EventCover from "../../components/EventCover";
 
 function RejectModal({ event, onClose, onDone }) {
   const toast = useToast();
@@ -68,12 +68,9 @@ export default function EventApprovals() {
       ) : (
         queue.map((event) => (
           <Card key={event.id} className="flex flex-col lg:flex-row gap-4">
-            <div
-              className="h-40 lg:h-auto lg:w-48 flex-none rounded-md flex items-end p-3"
-              style={{ background: event.image_data_url ? `url(${event.image_data_url}) center/cover` : categoryGradient(event.category) }}
-            >
-              <span className="text-caption text-white/90 uppercase tracking-wide bg-black/30 rounded-sm px-1.5 py-0.5">{event.category}</span>
-            </div>
+            <EventCover event={event} className="h-40 lg:h-auto lg:w-48 flex-none rounded-md flex items-end p-3">
+              <span className="relative text-caption text-white/90 uppercase tracking-wide bg-black/30 rounded-sm px-1.5 py-0.5">{event.category}</span>
+            </EventCover>
 
             <div className="flex-1 flex flex-col gap-3">
               <div>

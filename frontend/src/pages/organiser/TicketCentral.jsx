@@ -33,7 +33,8 @@ function TimelineRow({ row }) {
 export default function TicketCentral() {
   const toast = useToast();
   const { data: events } = useApiData(() => api.getOrganiserEvents());
-  const [eventId, setEventId] = useState("");
+  // ?event=<id> when arriving from the Events list.
+  const [eventId, setEventId] = useState(() => new URLSearchParams(window.location.search).get("event") || "");
   const [status, setStatus] = useState("");
   const [query, setQuery] = useState("");
   const [selectedIds, setSelectedIds] = useState([]);

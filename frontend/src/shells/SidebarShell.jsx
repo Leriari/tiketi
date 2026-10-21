@@ -1,9 +1,10 @@
 import { useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
-import { Menu, ExternalLink, Bell } from "lucide-react";
+import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
+import { Menu, ArrowLeft } from "lucide-react";
 import { ThemeToggle, Avatar, DropdownMenu, Drawer } from "../components/ui";
-import { useAuth } from "../context/AuthContext";
+import { useAuth, useSurfaceAccess } from "../context/AuthContext";
 import { cn } from "../lib/cn";
+import BrandMark from "../components/BrandMark";
 
 /**
  * Spec §2.1: fixed 264px sidebar, collapses to a 64px icon rail below 1280px
@@ -46,7 +47,7 @@ function NavLinks({ navGroups, collapsed, onNavigate }) {
               >
                 {({ isActive }) => (
                   <>
-                    {isActive && <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-full bg-brand-primary" />}
+                    {isActive && <span className="absolute left-0 top-1.5 bottom-1.5 w-[3px] rounded-full bg-brand-primary shadow-[0_0_10px_var(--brand-primary)]" />}
                     <item.icon size={18} className="flex-none" />
                     {!collapsed && <span className="truncate">{item.label}</span>}
                   </>
@@ -60,29 +61,39 @@ function NavLinks({ navGroups, collapsed, onNavigate }) {
   );
 }
 
-function Brand({ collapsed }) {
+// The logo always goes home — same as every other surface.
+function Brand({ collapsed, onNavigate }) {
   return (
-    <div className={cn("flex items-center gap-2 h-16 flex-none", collapsed ? "justify-center px-0" : "px-4")}>
-      <span className="h-7 w-7 flex-none rounded-md bg-brand-accent flex items-center justify-center text-brand-accent-ink font-black">C</span>
-      {!collapsed && (
-        <>
-          <span className="font-bold text-h3 text-ink-primary">ChainTix</span>
-          <a href="/" className="ml-auto text-ink-tertiary hover:text-ink-primary" title="View site">
-            <ExternalLink size={14} />
-          </a>
-        </>
-      )}
+    <div className={cn("flex items-center h-16 flex-none", collapsed ? "justify-center px-0" : "px-4")}>
+      <Link to="/" onClick={onNavigate} title="Home" className="rounded-md">
+        {collapsed ? <BrandMark /> : <BrandMark withWordmark />}
+        {collapsed && <span className="sr-only">ChainTix</span>}
+      </Link>
     </div>
   );
 }
 
-export default function SidebarShell({ navGroups, footerCard, roleLabel, profilePath = "/" }) {
+// Every surface this person can reach, minus the one they're on — so moving
+// between Seller, Organiser and Admin never means going via the home page.
+function useSwitchItems(surface) {
+  const navigate = useNavigate();
+  const access = useSurfaceAccess();
+  const items = [{ label: "Events (home)", onClick: () => navigate("/") }, { label: "My tickets", onClick: () => navigate("/tickets") }];
+  if (surface !== "seller") items.push({ label: "Seller portal", onClick: () => navigate("/seller") });
+  if (surface !== "organiser" && access.organiser) items.push({ label: "Organiser Console", onClick: () => navigate("/organiser") });
+  if (surface !== "admin" && access.admin) items.push({ label: "Platform admin", onClick: () => navigate("/admin") });
+  return items;
+}
+
+/** surface: "seller" | "organiser" | "admin" — which one this shell is. */
+export default function SidebarShell({ navGroups, footerCard, roleLabel, profilePath = "/", surface }) {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const switchItems = useSwitchItems(surface);
 
   return (
-    <div className="min-h-screen flex bg-surface-base">
+    <div className="min-h-screen flex app-backdrop">
       {/* Persistent sidebar >= 900px — icon rail 900-1279px, full 264px at xl+ */}
       <aside className="hidden sidebar:flex sidebar:w-16 xl:w-64 flex-none flex-col border-r border-line-subtle bg-surface sticky top-0 h-screen">
         <div className="xl:hidden">
@@ -103,33 +114,38 @@ export default function SidebarShell({ navGroups, footerCard, roleLabel, profile
       {/* Off-canvas drawer < 900px */}
       <Drawer open={drawerOpen} onClose={() => setDrawerOpen(false)} side="left" title="Menu" width="280px">
         <div className="-m-5 flex flex-col h-full">
+          <Link
+            to="/"
+            onClick={() => setDrawerOpen(false)}
+            className="flex items-center gap-2 mx-3 mt-2 mb-1 px-2.5 h-10 rounded-md text-body-sm font-medium text-ink-secondary hover:bg-surface-elevated hover:text-ink-primary"
+          >
+            <ArrowLeft size={16} /> Back to ChainTix
+          </Link>
           <NavLinks navGroups={navGroups} collapsed={false} onNavigate={() => setDrawerOpen(false)} />
           {footerCard && <div className="p-3">{footerCard}</div>}
         </div>
       </Drawer>
 
       <div className="flex-1 min-w-0 flex flex-col">
-        <header className="sticky top-0 z-10 h-16 flex-none border-b border-line-subtle bg-surface flex items-center gap-3 px-4 lg:px-6">
+        <header className="sticky top-0 z-10 h-16 flex-none border-b border-line-subtle glass flex items-center gap-3 px-4 lg:px-6">
           <button onClick={() => setDrawerOpen(true)} className="sidebar:hidden text-ink-secondary hover:text-ink-primary" aria-label="Open menu">
             <Menu size={20} />
           </button>
-          <span className="sidebar:hidden font-bold text-h3 text-ink-primary">ChainTix</span>
+          <Link to="/" title="Home" className="sidebar:hidden rounded-md"><BrandMark withWordmark /></Link>
 
           <span className="hidden sidebar:inline text-body-sm text-ink-tertiary">{roleLabel}</span>
 
           <div className="ml-auto flex items-center gap-3">
             <ThemeToggle className="hidden sm:inline-flex" />
-            <button className="relative text-ink-secondary hover:text-ink-primary" aria-label="Notifications">
-              <Bell size={18} />
-            </button>
             <DropdownMenu
               trigger={
-                <button className="flex items-center gap-2">
+                <button className="flex items-center gap-2" aria-label="Account menu">
                   <Avatar name={user?.phoneNumber} size="sm" />
                 </button>
               }
               items={[
-                { label: "Profile", onClick: () => navigate(profilePath) },
+                ...switchItems,
+                { label: "My profile", onClick: () => navigate("/profile") },
                 { label: "Settings", onClick: () => navigate(profilePath) },
                 { label: "Log out", danger: true, onClick: () => { logout(); navigate("/"); } },
               ]}

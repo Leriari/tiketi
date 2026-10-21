@@ -1,9 +1,11 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
+import redis
 
 from app.core.config import get_settings
-from app.api.routes import auth, events, payments, tickets, gate, resale, dev, organisations
+from app.api.routes import auth, events, payments, tickets, gate, resale, dev, organisations, organiser_console, me
 
 settings = get_settings()
 
@@ -25,11 +27,30 @@ app = FastAPI(
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"] if settings.DEBUG else ["https://tiketi.ke"],
+    allow_origins=(
+        [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
+        or (["*"] if settings.DEBUG else [])
+    ),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+
+# Redis backs the OTP store and rate limits, so every login request needs
+# it. Unhandled, a dead Redis surfaces as a bare 500 with no CORS headers —
+# which the browser reports as an opaque "Failed to fetch". Handled here,
+# the response passes back through CORSMiddleware and says what's wrong.
+@app.exception_handler(redis.exceptions.ConnectionError)
+@app.exception_handler(redis.exceptions.TimeoutError)
+async def redis_unavailable_handler(request: Request, exc: Exception):
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Login is temporarily unavailable: the server can't reach Redis."
+                 + (" Start it with: docker start tiketi-redis" if settings.APP_ENV == "development" else "")},
+    )
+
 
 # ── Routers ────────────────────────────────────────────────────────────────────
 PREFIX = settings.API_V1_PREFIX
@@ -40,6 +61,8 @@ app.include_router(tickets.router,  prefix=PREFIX)
 app.include_router(gate.router,     prefix=PREFIX)
 app.include_router(resale.router,   prefix=PREFIX)
 app.include_router(organisations.router, prefix=PREFIX)
+app.include_router(organiser_console.router, prefix=PREFIX)
+app.include_router(me.router, prefix=PREFIX)
 # Deliberately NOT under PREFIX — /dev/otp-inbox is not part of the
 # versioned public API surface at all (Work Order 04 A5).
 app.include_router(dev.router)
@@ -52,4 +75,19 @@ def health_check():
         "service": "TiketiKE API",
         "version": "1.0.0",
         "env": settings.APP_ENV,
+        # What the login screen should offer: "otp" (codes are delivered) or
+        # "demo_numbers" (no SMS — only configured demo numbers have codes).
+        "phone_login": "demo_numbers" if settings.OTP_DELIVERY_CHANNEL == "disabled" else "otp",
+        "google_phone_confirmation": settings.GOOGLE_PHONE_CONFIRMATION,
+        "simulated_payments": settings.simulated_payments,
+        # Firebase web config — public by design (it identifies the project,
+        # it doesn't authorise anything). The login screen uses Firebase for
+        # phone codes and Google sign-in only when this is present.
+        "firebase": {
+            "apiKey": settings.FIREBASE_API_KEY,
+            "authDomain": settings.FIREBASE_AUTH_DOMAIN or f"{settings.FIREBASE_PROJECT_ID}.firebaseapp.com",
+            "projectId": settings.FIREBASE_PROJECT_ID,
+            "appId": settings.FIREBASE_APP_ID or None,
+            "phoneAuth": settings.FIREBASE_PHONE_AUTH,
+        } if settings.FIREBASE_CONFIGURED else None,
     }

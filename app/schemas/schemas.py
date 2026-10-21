@@ -32,6 +32,9 @@ class PhoneOTPRequest(BaseModel):
 class OTPVerifyRequest(BaseModel):
     phone_number: str
     otp_code: str
+    # From a Google sign-in that returned needs_phone: verifying the phone
+    # (when Firebase SMS is off) also links that Google account to it.
+    google_link_token: Optional[str] = None
 
     @field_validator("phone_number")
     @classmethod
@@ -46,6 +49,37 @@ class TokenResponse(BaseModel):
     phone_number: str
 
 
+class FirebaseAuthRequest(BaseModel):
+    id_token: str  # Firebase Authentication ID token (phone or Google sign-in)
+    # From a previous Google sign-in that returned needs_phone: links that
+    # Google account to the phone this token verifies.
+    google_link_token: Optional[str] = None
+
+
+class GooglePhoneRequest(BaseModel):
+    """First Google sign-in when phone numbers can't be verified: the link
+    token from /auth/firebase plus the number to record (unverified)."""
+    link_token: str
+    phone_number: str
+
+    @field_validator("phone_number")
+    @classmethod
+    def validate_phone(cls, v):
+        return normalize_kenyan_phone(v)
+
+
+class AuthExchangeResponse(BaseModel):
+    """Either a session, or needs_phone with a short-lived link_token (a
+    Google account not yet linked to a phone)."""
+    needs_phone: bool = False
+    link_token: Optional[str] = None
+    email: Optional[str] = None
+    access_token: Optional[str] = None
+    token_type: str = "bearer"
+    user_id: Optional[str] = None
+    phone_number: Optional[str] = None
+
+
 class UserOut(BaseModel):
     id: str
     phone_number: str
@@ -56,44 +90,124 @@ class UserOut(BaseModel):
     # Work Order 04 C1 — the frontend's AuthContext fetches this after
     # login to know whether to show the Admin surface at all.
     is_platform_admin: bool = False
+    google_linked: bool = False
+    phone_verified: bool = True
 
     model_config = {"from_attributes": True}
 
 
 # ─── Events ───────────────────────────────────────────────────────────────────
 
-class EventCreate(BaseModel):
+# The Organiser Console's status vocabulary <-> EventStatus values.
+EVENT_STATUS_FROM_UI = {
+    "draft": "draft", "live": "published", "paused": "paused",
+    "sold_out": "sold_out", "cancelled": "cancelled",
+}
+EVENT_STATUS_TO_UI = {v: k for k, v in EVENT_STATUS_FROM_UI.items()} | {"completed": "completed"}
+
+
+class TierIn(BaseModel):
+    """One ticket category from the Event Management form. `id` is present
+    when editing an existing tier. Field names follow the form (camelCase
+    where the form uses it); extra keys the form carries along are ignored."""
+    id: Optional[str] = None
+    name: str = ""
+    description: Optional[str] = None
+    price: float = 0
+    capacity: int = 0
+    perOrderMax: Optional[int] = None
+    visibility: str = "public"
+    salesStart: Optional[datetime] = None
+    salesEnd: Optional[datetime] = None
+
+    @field_validator("perOrderMax", "salesStart", "salesEnd", mode="before")
+    @classmethod
+    def blank_is_none(cls, v):
+        return None if v in ("", None) else v
+
+    @field_validator("visibility")
+    @classmethod
+    def valid_visibility(cls, v):
+        if v not in ("public", "hidden", "password"):
+            raise ValueError("visibility must be public, hidden or password")
+        return v
+
+
+class GateIn(BaseModel):
+    id: Optional[str] = None
+    name: str
+
+
+class EventDetailsIn(BaseModel):
+    """Fields shared by create and update, every one optional here; the
+    route decides what a given status requires."""
+    title: Optional[str] = None
+    category: Optional[str] = None
+    description: Optional[str] = None
+    description_html: Optional[str] = None
+    image_data_url: Optional[str] = None
+    venue: Optional[str] = None
+    event_date: Optional[datetime] = None
+    ends_at: Optional[datetime] = None
+    artists: Optional[list[str]] = None
+    status: Optional[str] = None  # UI vocabulary: draft|live|paused|sold_out|cancelled
+    total_capacity: Optional[int] = None
+    max_resale_multiplier: Optional[float] = None
+    resale_royalty_percent: Optional[float] = None
+    resale_enabled: Optional[bool] = None
+    resale_window_open_days: Optional[int] = None
+    resale_window_close_hours: Optional[int] = None
+    tiers: Optional[list[TierIn]] = None
+    gates: Optional[list[GateIn]] = None
+
+    @field_validator("event_date", "ends_at", "total_capacity", mode="before")
+    @classmethod
+    def blank_is_none(cls, v):
+        return None if v in ("", None) else v
+
+    @field_validator("status")
+    @classmethod
+    def valid_status(cls, v):
+        if v is not None and v not in EVENT_STATUS_FROM_UI:
+            raise ValueError(f"status must be one of {', '.join(EVENT_STATUS_FROM_UI)}")
+        return v
+
+
+class EventCreate(EventDetailsIn):
     # Required (Work Order 04 B3) — every event belongs to an organisation.
     # The caller must be an OWNER member of it (app/core/authz.py).
     organization_id: str
     title: str
-    description: Optional[str] = None
-    venue: str
-    event_date: datetime
-    organizer_phone: str
-    ticket_price_kes: float
-    total_capacity: int
+    # Defaults to the creating user's own number.
+    organizer_phone: Optional[str] = None
+    # The original flat single-tier payload — still accepted; ignored when
+    # `tiers` is given.
+    ticket_price_kes: Optional[float] = None
     max_resale_multiplier: float = 1.2
     resale_royalty_percent: float = 10.0
 
     @field_validator("organizer_phone")
     @classmethod
     def validate_phone(cls, v):
-        return normalize_kenyan_phone(v)
+        return normalize_kenyan_phone(v) if v else v
 
     @field_validator("ticket_price_kes")
     @classmethod
     def positive_price(cls, v):
-        if v <= 0:
+        if v is not None and v <= 0:
             raise ValueError("Ticket price must be positive")
         return v
 
     @field_validator("total_capacity")
     @classmethod
     def positive_capacity(cls, v):
-        if v <= 0:
+        if v is not None and v <= 0:
             raise ValueError("Capacity must be positive")
         return v
+
+
+class EventUpdate(EventDetailsIn):
+    pass
 
 
 class TierOut(BaseModel):
@@ -117,7 +231,14 @@ class TierOut(BaseModel):
 class EventOut(BaseModel):
     id: str
     title: str
+    category: Optional[str] = None
+    # Path to the cover image (GET /events/{id}/image), never the bytes.
+    image_url: Optional[str] = None
     description: Optional[str]
+    description_html: Optional[str] = None
+    artists: Optional[list[str]] = None
+    ends_at: Optional[datetime] = None
+    availability: str = "available"
     venue: str
     event_date: datetime
     ticket_price_kes: float
@@ -126,12 +247,16 @@ class EventOut(BaseModel):
     tickets_remaining: int
     max_resale_price_kes: float
     resale_royalty_percent: float
+    resale_ceiling_multiplier: float = 1.2
+    resale_enabled: bool = True
+    map_url: Optional[str] = None
     contract_address: Optional[str]
     status: str
     created_at: datetime
-    tiers: list[TierOut] = []
+    # Hidden/password tiers are the organiser's to hand out, never listed.
+    tiers: list[TierOut] = Field(default=[], validation_alias="visible_tiers")
 
-    model_config = {"from_attributes": True}
+    model_config = {"from_attributes": True, "populate_by_name": True}
 
 
 # ─── Tickets ──────────────────────────────────────────────────────────────────
@@ -192,6 +317,7 @@ class PaymentStatusOut(BaseModel):
     id: str = None
     payment_id: str = None  # alias for id
     status: str
+    failure_reason: Optional[str] = None
     mpesa_receipt_number: Optional[str]
     amount_kes: float
     initiated_at: datetime
@@ -291,6 +417,8 @@ class MyOrganisationOut(OrganisationOut):
 class MemberInvite(BaseModel):
     phone_number: str
     role: str  # "owner" | "staff"
+    # Saved as the invitee's display name if they don't have one yet.
+    name: Optional[str] = None
 
     @field_validator("phone_number")
     @classmethod
@@ -320,6 +448,7 @@ class MemberOut(BaseModel):
     id: str
     account_id: str
     phone_number: str
+    display_name: Optional[str] = None
     role: str
     created_at: datetime
 
@@ -329,6 +458,7 @@ class MemberOut(BaseModel):
 class ScannerRegisterRequest(BaseModel):
     event_id: str
     gate_name: str
+    label: Optional[str] = None  # "Gate A — Scanner 1"
 
 
 class ScannerRegisterResponse(BaseModel):
@@ -382,3 +512,73 @@ class TicketSeedResponse(BaseModel):
     # decoder; the image endpoint (qr.png) remains the primary source once
     # camera scanning is added.
     qr_payload: str
+
+
+# ─── Organiser Console (organisation-scoped) ──────────────────────────────────
+
+class ComplimentaryTicketRequest(BaseModel):
+    event_id: str
+    tier_id: Optional[str] = None
+    recipient_name: str
+    recipient_phone: str
+    note: Optional[str] = None
+
+    @field_validator("recipient_phone")
+    @classmethod
+    def validate_phone(cls, v):
+        return normalize_kenyan_phone(v)
+
+    @field_validator("recipient_name")
+    @classmethod
+    def name_required(cls, v):
+        if not v.strip():
+            raise ValueError("Recipient name is required")
+        return v.strip()
+
+
+class ManualOverrideRequest(BaseModel):
+    ticket_id: str
+    reason: str
+
+    @field_validator("reason")
+    @classmethod
+    def reason_required(cls, v):
+        if not v.strip():
+            raise ValueError("A reason is required for a manual override")
+        return v.strip()
+
+
+class OrganisationProfileUpdate(BaseModel):
+    businessName: Optional[str] = None
+    kraPin: Optional[str] = None
+    contactEmail: Optional[str] = None
+    contactPhone: Optional[str] = None
+
+    @field_validator("contactPhone")
+    @classmethod
+    def validate_phone(cls, v):
+        return normalize_kenyan_phone(v) if v else None
+
+
+class PayoutDetailsUpdate(BaseModel):
+    payoutMethod: str
+    payoutDestination: str
+
+    @field_validator("payoutMethod")
+    @classmethod
+    def valid_method(cls, v):
+        if v not in ("mpesa", "bank"):
+            raise ValueError("payoutMethod must be 'mpesa' or 'bank'")
+        return v
+
+    @field_validator("payoutDestination")
+    @classmethod
+    def destination_required(cls, v):
+        if not v.strip():
+            raise ValueError("A payout destination is required")
+        return v.strip()
+
+
+class ExportRequest(BaseModel):
+    type: str  # ticket_sales | attendance | royalty_ledger | payouts
+    format: str = "csv"

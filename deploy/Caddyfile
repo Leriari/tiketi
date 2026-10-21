@@ -1,0 +1,7 @@
+# HTTPS for the API. API_DOMAIN is e.g. 158-101-23-4.sslip.io — a free
+# hostname that always resolves to the IP in its name, so Caddy can get a
+# real Let's Encrypt certificate with no domain to buy.
+{$API_DOMAIN} {
+	encode gzip
+	reverse_proxy api:8000
+}

@@ -2,9 +2,11 @@ import { forwardRef } from "react";
 import { Loader2 } from "lucide-react";
 import { cn } from "../../lib/cn";
 
+// docs/design-principles.md: lime is the only "do this" colour and the
+// only button that glows (P3); everything else is a quiet hairline (P2).
 const VARIANTS = {
-  primary: "bg-brand-accent text-brand-accent-ink hover:brightness-95 disabled:opacity-40",
-  secondary: "bg-transparent text-ink-primary border border-line-strong hover:bg-surface-elevated disabled:opacity-40",
+  primary: "bg-brand-accent text-brand-accent-ink hover:shadow-glow-accent hover:brightness-[1.03] disabled:opacity-40 disabled:shadow-none",
+  secondary: "bg-surface text-ink-primary border border-line shadow-highlight hover:border-line-strong hover:bg-surface-elevated disabled:opacity-40",
   ghost: "bg-transparent text-ink-secondary hover:bg-surface-elevated hover:text-ink-primary disabled:opacity-40",
   danger: "bg-danger text-white hover:brightness-110 disabled:opacity-40",
 };
@@ -26,7 +28,7 @@ const Button = forwardRef(function Button(
       ref={ref}
       disabled={disabled || loading}
       className={cn(
-        "inline-flex items-center justify-center font-semibold rounded-sm transition-colors duration-150 ease-out disabled:cursor-not-allowed",
+        "inline-flex items-center justify-center font-semibold tracking-[-0.01em] rounded-md transition-[background-color,border-color,box-shadow,filter,transform] duration-150 ease-out active:translate-y-px disabled:cursor-not-allowed disabled:active:translate-y-0",
         VARIANTS[variant],
         iconOnly ? ICON_ONLY_SIZES[size] : SIZES[size],
         className

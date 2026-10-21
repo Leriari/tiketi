@@ -6,13 +6,14 @@ import { useApiData } from "../../lib/useApiData";
 import { Select, Badge, Skeleton, ErrorState, MoneyText } from "../../components/ui";
 import { formatShortDate } from "../../format";
 import { CATEGORIES } from "../../constants";
-import { categoryGradient } from "../../lib/categoryGradient";
+import EventCover from "../../components/EventCover";
 
 function EventPoster({ event, className }) {
   return (
-    <div
-      className={`relative flex-none rounded-md overflow-hidden aspect-[16/9] flex items-end p-3 ${className || ""}`}
-      style={{ background: categoryGradient(event.category) }}
+    <EventCover
+      event={event}
+      scrim
+      className={`flex-none rounded-md aspect-[16/9] flex items-end p-3 ${className || ""}`}
     >
       {event.availability === "selling_fast" && (
         <Badge tone="danger" icon={<Flame size={11} />} className="absolute top-2 left-2">
@@ -23,7 +24,7 @@ function EventPoster({ event, className }) {
         <p className="text-body-sm font-semibold leading-tight drop-shadow">{event.title}</p>
         <p className="text-caption opacity-90">{formatShortDate(event.event_date)}</p>
       </div>
-    </div>
+    </EventCover>
   );
 }
 

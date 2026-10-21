@@ -2,9 +2,10 @@ import uuid
 from datetime import datetime, timezone
 from sqlalchemy import (
     String, Integer, Float, Boolean, DateTime,
-    ForeignKey, Enum as SAEnum, Text
+    ForeignKey, Enum as SAEnum, Text, JSON, LargeBinary
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
+from sqlalchemy import true as sa_true
 from app.db.session import Base
 import enum
 
@@ -62,7 +63,9 @@ class OrganizerRole(str, enum.Enum):
 
 class EventStatus(str, enum.Enum):
     DRAFT      = "draft"
-    PUBLISHED  = "published"
+    PUBLISHED  = "published"   # the Organiser Console calls this "live"
+    PAUSED     = "paused"      # organiser-paused: visible to nobody, not buyable
+    SOLD_OUT   = "sold_out"    # organiser-marked sold out: listed, not buyable
     CANCELLED  = "cancelled"
     COMPLETED  = "completed"
 
@@ -135,9 +138,21 @@ class User(Base):
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     phone_number: Mapped[str] = mapped_column(String(15), unique=True, index=True, nullable=False)
+    # False only for a Google user whose number was recorded without a code
+    # (GOOGLE_PHONE_CONFIRMATION=unverified) — then it's just their default
+    # M-Pesa number, never proof of who they are. A later phone-code sign-in
+    # verifies it.
+    phone_verified: Mapped[bool] = mapped_column(Boolean, default=True, server_default=sa_true())
     # Phone is the identity — no password needed (OTP-based auth)
     display_name: Mapped[str | None] = mapped_column(String(100))
     email: Mapped[str | None] = mapped_column(String(255), unique=True)
+    # Google account ("sub" claim) linked to this user, if they've used
+    # "Continue with Google". Every account still has a verified phone —
+    # Google sign-in links to one, it never replaces it.
+    google_sub: Mapped[str | None] = mapped_column(String(255), index=True, unique=True)
+    # Bumped by "sign out everywhere": every access token carries the
+    # version it was issued under, and older ones stop working.
+    session_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -164,6 +179,10 @@ class User(Base):
     tickets: Mapped[list["Ticket"]] = relationship("Ticket", back_populates="owner")
     payments: Mapped[list["Payment"]] = relationship("Payment", back_populates="user")
 
+    @property
+    def google_linked(self) -> bool:
+        return bool(self.google_sub)
+
 
 class Organizer(Base):
     """A verified event-organizing business. Wired via app/api/routes/organisations.py
@@ -179,6 +198,12 @@ class Organizer(Base):
     )
     mpesa_paybill: Mapped[str | None] = mapped_column(String(20))
     royalty_wallet_address: Mapped[str | None] = mapped_column(String(42))
+    # Organiser Console profile/payout settings. Payout details are stored
+    # only — no automated payout is executed anywhere in this codebase.
+    contact_email: Mapped[str | None] = mapped_column(String(255))
+    contact_phone: Mapped[str | None] = mapped_column(String(15))
+    payout_method: Mapped[str | None] = mapped_column(String(20))  # "mpesa" | "bank"
+    payout_destination: Mapped[str | None] = mapped_column(String(50))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
@@ -229,9 +254,29 @@ class Event(Base):
     status: Mapped[EventStatus] = mapped_column(SAEnum(EventStatus), default=EventStatus.PUBLISHED)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
+    # Organiser Console event details (Event Management form).
+    category: Mapped[str | None] = mapped_column(String(50))
+    description_html: Mapped[str | None] = mapped_column(Text)
+    # Cover image: the processed bytes (resized, re-encoded WebP — see
+    # app/services/event_images.py), served by GET /events/{id}/image.
+    # Deferred so listing events never pulls image blobs off disk; only the
+    # image endpoint reads it. In the DB rather than object storage to keep
+    # deployment to one database — a few hundred KB per event at most.
+    image_data: Mapped[bytes | None] = mapped_column(LargeBinary, deferred=True)
+    image_mime: Mapped[str | None] = mapped_column(String(30))
+    image_updated_at: Mapped[datetime | None] = mapped_column(DateTime)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime)
+    artists: Mapped[list | None] = mapped_column(JSON)
+    # [{"id": "...", "name": "Gate A"}] — the gates an organiser configured.
+    # Scanner registration (gate.py) and partitioning key off gate *names*.
+    gates: Mapped[list | None] = mapped_column(JSON)
+    resale_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
+    resale_window_open_days: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    resale_window_close_hours: Mapped[int] = mapped_column(Integer, default=2, server_default="2")
+
     tickets: Mapped[list["Ticket"]] = relationship("Ticket", back_populates="event")
     tiers: Mapped[list["EventTier"]] = relationship(
-        "EventTier", back_populates="event", order_by="EventTier.created_at"
+        "EventTier", back_populates="event", order_by="[EventTier.sort_order, EventTier.created_at]"
     )
 
     @property
@@ -239,8 +284,51 @@ class Event(Base):
         return self.total_capacity - self.tickets_sold
 
     @property
+    def image_url(self) -> str | None:
+        """Path to the cover image, versioned by upload time so browsers can
+        cache it forever and still pick up a replacement immediately."""
+        if not self.image_mime:
+            return None
+        from app.core.config import get_settings
+        version = int(self.image_updated_at.timestamp()) if self.image_updated_at else 0
+        return f"{get_settings().API_V1_PREFIX}/events/{self.id}/image?v={version}"
+
+    @property
+    def map_url(self) -> str:
+        from urllib.parse import quote
+        return f"https://www.google.com/maps/search/?api=1&query={quote(self.venue or '')}"
+
+    @property
+    def resale_ceiling_multiplier(self) -> float:
+        """Resale cap as a multiple of face value (1.2 = 120%)."""
+        tier = self.default_tier
+        if tier and tier.price_kes:
+            return round(tier.resale_ceiling_price_kes / tier.price_kes, 2)
+        return 1.2
+
+    @property
+    def availability(self) -> str:
+        """'available' | 'selling_fast' | 'sold_out' — what event cards badge."""
+        remaining = self.total_capacity - self.tickets_sold
+        if self.status == EventStatus.SOLD_OUT or remaining <= 0:
+            return "sold_out"
+        if self.total_capacity and remaining / self.total_capacity <= 0.15:
+            return "selling_fast"
+        return "available"
+
+    @property
+    def visible_tiers(self) -> list["EventTier"]:
+        """Tiers the public may see and buy — hidden/password tiers are the
+        organiser's to hand out, never listed."""
+        return [t for t in self.tiers if (t.visibility or "public") == "public"]
+
+    @property
     def default_tier(self) -> "EventTier | None":
-        """Phase 1 only ever creates one tier per event; multi-tier selection lands in Phase 2."""
+        """The tier a purchase without an explicit tier_id resolves to: the
+        organiser's first public tier (falls back to the first tier at all)."""
+        visible = self.visible_tiers
+        if visible:
+            return visible[0]
         return self.tiers[0] if self.tiers else None
 
     # ── Compatibility shims — Phase 1 keeps the flat pricing API surface stable
@@ -248,6 +336,10 @@ class Event(Base):
 
     @property
     def ticket_price_kes(self) -> float:
+        """"From" price — the cheapest public tier."""
+        visible = self.visible_tiers
+        if visible:
+            return min(t.price_kes for t in visible)
         return self.default_tier.price_kes if self.default_tier else 0.0
 
     @property
@@ -279,6 +371,14 @@ class EventTier(Base):
     status: Mapped[TierStatus] = mapped_column(SAEnum(TierStatus), default=TierStatus.ACTIVE)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
+    # Organiser Console tier settings.
+    description: Mapped[str | None] = mapped_column(Text)
+    per_order_max: Mapped[int | None] = mapped_column(Integer)
+    visibility: Mapped[str] = mapped_column(String(20), default="public", server_default="public")
+    sales_start: Mapped[datetime | None] = mapped_column(DateTime)
+    sales_end: Mapped[datetime | None] = mapped_column(DateTime)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
     event: Mapped["Event"] = relationship("Event", back_populates="tiers")
     tickets: Mapped[list["Ticket"]] = relationship("Ticket", back_populates="tier")
     payments: Mapped[list["Payment"]] = relationship("Payment", back_populates="tier")
@@ -301,7 +401,13 @@ class Ticket(Base):
     # Set only for the 2nd+ ticket in a quantity>1 purchase — the 1st ticket is
     # still linked the original way, via Payment.ticket_id. Lets one payment
     # activate/mint every ticket it covers, not just the first.
-    group_payment_id: Mapped[str | None] = mapped_column(ForeignKey("payments.id"))
+    # Named + use_alter: tickets and payments reference each other, and a
+    # cycle can only be created/dropped (create_all, test teardown on
+    # Postgres) if one side is a separately-named ALTER. Same name the
+    # migration (5b8936e65664) gives it.
+    group_payment_id: Mapped[str | None] = mapped_column(
+        ForeignKey("payments.id", name="fk_tickets_group_payment_id", use_alter=True)
+    )
 
     status: Mapped[TicketStatus] = mapped_column(
         SAEnum(TicketStatus), default=TicketStatus.PENDING_PAYMENT
@@ -313,6 +419,12 @@ class Ticket(Base):
 
     # Seat info (if applicable)
     seat_number: Mapped[str | None] = mapped_column(String(20))
+
+    # Issued free by the organiser (Control Center "Send Complimentary
+    # Tickets") — no Payment row exists for these.
+    is_complimentary: Mapped[bool] = mapped_column(Boolean, default=False, server_default="0")
+    complimentary_note: Mapped[str | None] = mapped_column(String(255))
+    recipient_name: Mapped[str | None] = mapped_column(String(100))
 
     # Timestamps
     purchased_at: Mapped[datetime | None] = mapped_column(DateTime)
@@ -512,6 +624,8 @@ class GateScanner(Base):
     account_id: Mapped[str | None] = mapped_column(ForeignKey("users.id"))  # operator account
 
     gate_name: Mapped[str] = mapped_column(String(100), nullable=False)
+    # Human label the organiser gave the device ("Gate A — Scanner 1").
+    label: Mapped[str | None] = mapped_column(String(100))
     # Nullable until the device actually enrolls — registration (the
     # organiser's step) happens before any physical device has connected or
     # chosen an id for itself.
@@ -541,7 +655,11 @@ class Attendance(Base):
     __tablename__ = "attendances"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    ticket_id: Mapped[str] = mapped_column(ForeignKey("tickets.id"), nullable=False)
+    # Null when the scanned QR named a ticket that doesn't exist (a forged
+    # or garbled code) — the raw id is kept in scanned_ref instead, so those
+    # denials are still recorded (they're the most interesting ones).
+    ticket_id: Mapped[str | None] = mapped_column(ForeignKey("tickets.id"))
+    scanned_ref: Mapped[str | None] = mapped_column(String(64))
     event_id: Mapped[str] = mapped_column(ForeignKey("events.id"), nullable=False)
     scanner_id: Mapped[str | None] = mapped_column(ForeignKey("gate_scanners.id"))
 
@@ -562,6 +680,8 @@ class AuditLog(Base):
     action_type: Mapped[str] = mapped_column(String(50), nullable=False)
     target_id: Mapped[str | None] = mapped_column(String(36))
     target_type: Mapped[str | None] = mapped_column(String(50))
+    # Free text: a manual override's reason, an export's type/format, etc.
+    details: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 

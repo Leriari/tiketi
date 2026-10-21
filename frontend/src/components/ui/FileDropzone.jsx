@@ -6,8 +6,10 @@ import { cn } from "../../lib/cn";
  * accept: e.g. "image/png,image/jpeg,image/webp"
  * maxSizeMb: rejects larger files with an inline error
  * onFile(file | null)
+ * value: URL of an already-saved image to show until a new file is picked
+ *        (removing it calls onFile(null), same as removing a picked file)
  */
-export default function FileDropzone({ label, accept = "image/png,image/jpeg,image/webp", maxSizeMb = 5, onFile, hint }) {
+export default function FileDropzone({ label, accept = "image/png,image/jpeg,image/webp", maxSizeMb = 5, onFile, hint, value }) {
   const id = useId();
   const inputRef = useRef(null);
   const [dragging, setDragging] = useState(false);
@@ -52,11 +54,11 @@ export default function FileDropzone({ label, accept = "image/png,image/jpeg,ima
         </label>
       )}
 
-      {preview ? (
+      {preview || value ? (
         <div className="relative rounded-md border border-line overflow-hidden bg-surface-inset">
-          <img src={preview} alt="" className="w-full aspect-square object-cover" />
+          <img src={preview || value} alt="" className="w-full aspect-square object-cover" />
           <div className="absolute inset-x-0 bottom-0 bg-surface-base/80 backdrop-blur px-3 py-2 flex items-center justify-between gap-2">
-            <span className="text-caption text-ink-secondary truncate">{fileName}</span>
+            <span className="text-caption text-ink-secondary truncate">{preview ? fileName : "Current image"}</span>
             <button type="button" onClick={clear} className="text-ink-tertiary hover:text-danger flex-none" aria-label="Remove file">
               <X size={16} />
             </button>

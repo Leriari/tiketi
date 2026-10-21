@@ -3,8 +3,9 @@ import { cn } from "../../lib/cn";
 import Field from "./Field";
 
 const baseInput =
-  "w-full h-10 rounded-sm bg-surface-inset border border-line px-3 text-body text-ink-primary placeholder:text-ink-tertiary " +
-  "focus:outline-none focus:ring-2 focus:ring-brand-primary focus:border-brand-primary disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-150";
+  "w-full h-10 rounded-md bg-surface-inset border border-line px-3 text-body text-ink-primary placeholder:text-ink-tertiary " +
+  "hover:border-line-strong focus:outline-none focus:border-brand-primary focus:shadow-glow-focus " +
+  "disabled:opacity-50 disabled:cursor-not-allowed transition-[border-color,box-shadow] duration-150";
 
 const Input = forwardRef(function Input({ label, hint, error, required, className, leadingIcon, trailingIcon, ...props }, ref) {
   return (

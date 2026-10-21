@@ -35,6 +35,8 @@ function TrafficSources() {
         <ErrorState description={error} onRetry={retry} />
       ) : !data ? (
         <Skeleton className="h-40 w-full" />
+      ) : data.trackingEnabled === false ? (
+        <p className="text-body-sm text-ink-tertiary">Traffic sources aren't tracked yet, so there's nothing real to show here.</p>
       ) : (
         <div className="flex flex-col sm:flex-row gap-6 items-center">
           <svg width="140" height="140" viewBox="0 0 140 140" className="flex-none">
@@ -89,6 +91,7 @@ function TrafficSources() {
 
 function CompTicketPanel({ events }) {
   const toast = useToast();
+  const navigate = useNavigate();
   const [eventId, setEventId] = useState(events?.[0]?.id || "");
   const [tierId, setTierId] = useState(events?.[0]?.tiers[0]?.id || "");
   const [name, setName] = useState("");
@@ -99,7 +102,7 @@ function CompTicketPanel({ events }) {
   if (!events || events.length === 0) {
     return (
       <Card padding="p-0">
-        <EmptyState title="No active events right now" description="Create an event to get started." actionLabel="Create Event" onAction={() => (window.location.href = "/organiser/events/new")} />
+        <EmptyState title="No active events right now" description="Create an event to get started." actionLabel="Create Event" onAction={() => navigate("/organiser/events/new")} />
       </Card>
     );
   }
@@ -147,7 +150,7 @@ export default function ControlCenter() {
   return (
     <div className="mx-auto max-w-5xl px-4 lg:px-6 py-6 flex flex-col gap-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
-        <h1 className="text-h1 text-ink-primary">Welcome back, {user ? formatPhone(user.phoneNumber).slice(0, 9) : "there"}</h1>
+        <h1 className="text-h1 text-ink-primary">Welcome back, {data?.organiserName || (user ? formatPhone(user.phoneNumber).slice(0, 9) : "there")}</h1>
         <Button variant="primary" iconLeft={<CalendarPlus size={15} />} onClick={() => navigate("/organiser/events/new")} className="w-auto px-5">
           Drop New Event
         </Button>
@@ -159,9 +162,11 @@ export default function ControlCenter() {
         <Skeleton className="h-64 w-full" />
       ) : (
         <>
-          <div className="flex gap-2">
-            {data.activePlans.map((p) => <Badge key={p} tone="brand">{p}</Badge>)}
-          </div>
+          {data.activePlans.length > 0 && (
+            <div className="flex gap-2">
+              {data.activePlans.map((p) => <Badge key={p} tone="brand">{p}</Badge>)}
+            </div>
+          )}
 
           <div className="grid sm:grid-cols-2 gap-3">
             <Card className="bg-success-bg border-success/20">

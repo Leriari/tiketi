@@ -16,6 +16,7 @@ token, not a user JWT — a steward shouldn't need to be a user account, and
 a phone at a gate shouldn't carry credentials that work anywhere else.
 """
 import secrets
+import uuid
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -135,11 +136,21 @@ def register_scanner(
         raise HTTPException(status_code=403, detail="This event has no organisation and cannot be managed")
     check_org_role(db, current_user.id, event.organizer_id, OrganizerRole.STAFF)
 
+    # Registering a device at a gate the event doesn't list yet adds that
+    # gate, so the event's gate list (Event Management, Crowd Control)
+    # always covers every gate tickets are partitioned over.
+    gate_name = body.gate_name.strip()
+    if not gate_name:
+        raise HTTPException(status_code=400, detail="A gate name is required")
+    if gate_name not in [g.get("name") for g in (event.gates or [])]:
+        event.gates = [*(event.gates or []), {"id": str(uuid.uuid4()), "name": gate_name}]
+
     code = secrets.token_hex(4).upper()  # short, human-typeable
     scanner = GateScanner(
         event_id=event.id,
         organizer_id=event.organizer_id,
-        gate_name=body.gate_name,
+        gate_name=gate_name,
+        label=(body.label or "").strip() or None,
         enrollment_code=code,
         # Naive UTC deliberately — SQLite round-trips DateTime columns as
         # naive, and comparing that against an aware "now" raises (same
@@ -210,6 +221,10 @@ def revoke_scanner(
     check_org_role(db, current_user.id, scanner.organizer_id, OrganizerRole.STAFF)
 
     scanner.status = GateScannerStatus.INACTIVE
+    # A device revoked before it enrolled must not be able to enrol later
+    # with the code it was already given.
+    scanner.enrollment_code = None
+    scanner.enrollment_code_expires_at = None
     db.commit()
 
 
@@ -319,8 +334,43 @@ def upload_scan_batch(
     against an identical prior row from the same scanner.
     """
     results: list[ScanUploadResultItem] = []
+    ids = {item.ticket_id for item in body.scans}
+    known = {tid for (tid,) in db.query(Ticket.id).filter(Ticket.id.in_(ids)).all()} if ids else set()
 
     for item in body.scans:
+        if item.ticket_id not in known:
+            # A QR naming a ticket that doesn't exist (forged/garbled). An
+            # admission for it can't be right, so it isn't stored as one; a
+            # denial is kept, against the raw scanned id. (Postgres enforces
+            # the tickets foreign key — inserting it as ticket_id would fail
+            # the whole batch.)
+            if item.granted:
+                results.append(ScanUploadResultItem(
+                    ticket_id=item.ticket_id, status="conflict",
+                    detail="No such ticket exists, so this admission wasn't recorded",
+                ))
+                continue
+            duplicate = (
+                db.query(Attendance)
+                .filter(
+                    Attendance.ticket_id.is_(None),
+                    Attendance.scanned_ref == item.ticket_id[:64],
+                    Attendance.scanner_id == scanner.id,
+                    Attendance.scan_time == item.scanned_at,
+                )
+                .first()
+            )
+            if duplicate:
+                results.append(ScanUploadResultItem(ticket_id=item.ticket_id, status="duplicate"))
+                continue
+            db.add(Attendance(
+                ticket_id=None, scanned_ref=item.ticket_id[:64], event_id=scanner.event_id,
+                scanner_id=scanner.id, scan_time=item.scanned_at,
+                status=AttendanceStatus.DENIED, denial_reason=item.reason_code,
+            ))
+            results.append(ScanUploadResultItem(ticket_id=item.ticket_id, status="recorded"))
+            continue
+
         if item.granted:
             existing_admit = (
                 db.query(Attendance)

@@ -45,6 +45,7 @@ export default function DropdownMenu({ trigger, items, placement = "bottom-end" 
                   key={item.label}
                   ref={(node) => (listRef.current[i] = node)}
                   type="button"
+                  role="menuitem"
                   disabled={item.disabled}
                   {...getItemProps({
                     onClick() {

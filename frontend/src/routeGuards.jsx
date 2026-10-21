@@ -20,6 +20,10 @@ function Unauthorised({ message }) {
 }
 
 function RequireLogin({ returnPath }) {
+  const { loggedOut } = useAuth();
+  // Logged out from this very page (Account, Seller, Organiser…) — go home,
+  // not to a login screen they just chose to leave.
+  if (loggedOut) return <Navigate to="/" replace />;
   return <Navigate to={`/login?return=${encodeURIComponent(returnPath)}`} replace />;
 }
 

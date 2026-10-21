@@ -23,6 +23,7 @@ security questions well beyond this integration's scope.
 import json
 import logging
 import re
+import threading
 from pathlib import Path
 from functools import lru_cache
 
@@ -118,17 +119,38 @@ def _uuid_to_uint256(value: str) -> int:
     return int.from_bytes(Web3.keccak(text=str(value)), "big")
 
 
+# Last nonce this process broadcast from the minter wallet. Back-to-back
+# transactions (a multi-ticket purchase queues one mint per ticket) used to
+# reuse a nonce: the public Base Sepolia RPC is load-balanced, so the count
+# fetched for the second tx could come from a node that hadn't seen the
+# first yet -> "nonce too low", costing a 30s Celery retry each time (and
+# with max_retries=3, a busy burst could exhaust them). Never going below
+# our own last-used nonce closes that within this worker process.
+_nonce_lock = threading.Lock()
+_last_nonce: int | None = None
+
+
 def _send_transaction(fn):
     """Build, sign, and send a transaction from the minter wallet; block for the receipt."""
+    global _last_nonce
     w3 = _get_web3()
     account = Account.from_key(settings.MINTER_PRIVATE_KEY)
-    tx = fn.build_transaction({
-        "from": account.address,
-        "nonce": w3.eth.get_transaction_count(account.address),
-    })
-    signed = account.sign_transaction(tx)
-    tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
-    return w3.eth.wait_for_transaction_receipt(tx_hash)
+    with _nonce_lock:
+        nonce = w3.eth.get_transaction_count(account.address, "pending")
+        if _last_nonce is not None and nonce <= _last_nonce:
+            nonce = _last_nonce + 1
+        tx = fn.build_transaction({"from": account.address, "nonce": nonce})
+        signed = account.sign_transaction(tx)
+        tx_hash = w3.eth.send_raw_transaction(signed.raw_transaction)
+        _last_nonce = nonce
+    try:
+        return w3.eth.wait_for_transaction_receipt(tx_hash)
+    except Exception:
+        # The tx may have been dropped; don't keep building on a nonce the
+        # chain may never see — re-sync from the node on the next send.
+        with _nonce_lock:
+            _last_nonce = None
+        raise
 
 
 def mint_ticket_onchain(

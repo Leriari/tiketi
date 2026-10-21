@@ -145,3 +145,24 @@ def pytest_unconfigure(config):
         if _node_process.returncode is None:
             _node_process.kill()
         _node_process = None
+
+
+import pytest
+
+
+@pytest.fixture(autouse=True, scope="module")
+def _fresh_rate_limits():
+    """Reset rate-limit counters at the start of every test module.
+
+    Every TestClient request comes from the same "IP", so the per-IP limits
+    (e.g. 40 logins / 5 min) accumulate across the whole run and start
+    returning 429 once enough modules have logged users in. Tests that
+    check the limits themselves count within a single test, so resetting
+    between modules doesn't weaken them.
+    """
+    import redis
+    client = redis.Redis.from_url(os.environ["REDIS_URL"])
+    keys = list(client.scan_iter("ratelimit:*"))
+    if keys:
+        client.delete(*keys)
+    yield

@@ -59,8 +59,10 @@ export default {
         info: { DEFAULT: "var(--info)", bg: "var(--info-bg)", "on-tint": "var(--info-on-tint)" },
         chain: { verified: "var(--chain-verified)", pending: "var(--chain-pending)" },
       },
+      // docs/design-principles.md P1/P4 — Geist for UI, Geist Mono for data.
       fontFamily: {
-        sans: ["Inter", "system-ui", "-apple-system", "Segoe UI", "sans-serif"],
+        sans: ["var(--font-sans)"],
+        mono: ["var(--font-mono)"],
       },
       fontSize: {
         display: ["34px", { lineHeight: "1.15" }],
@@ -73,14 +75,19 @@ export default {
         metric: ["30px", { lineHeight: "1.1" }],
         caption: ["12px", { lineHeight: "1.4" }],
       },
+      // P2 — precise, not bubbly.
       borderRadius: {
-        sm: "6px",
-        md: "10px",
-        lg: "14px",
+        sm: "4px",
+        md: "8px",
+        lg: "12px",
       },
+      // Theme-aware: the values live in tokens.css (P3/P5).
       boxShadow: {
-        card: "0 1px 2px rgba(20,23,26,0.05)",
-        modal: "0 8px 24px rgba(20,23,26,0.12)",
+        card: "var(--shadow-card)",
+        modal: "var(--shadow-modal)",
+        highlight: "var(--highlight)",
+        "glow-accent": "var(--glow-accent)",
+        "glow-focus": "var(--glow-focus)",
       },
       transitionDuration: { 220: "220ms" },
       transitionTimingFunction: {

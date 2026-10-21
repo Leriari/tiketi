@@ -1,11 +1,39 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { MapPin, Share2, CalendarPlus, ShieldCheck, Bell } from "lucide-react";
 import { api } from "../../api";
 import { useToast } from "../../components/ui/Toast";
 import { Badge, Button, Card, MoneyText, Skeleton, ErrorState } from "../../components/ui";
 import { formatEventDate } from "../../format";
-import { categoryGradient } from "../../lib/categoryGradient";
+import EventCover from "../../components/EventCover";
+import ResaleListingCard from "../../components/ResaleListingCard";
+import { useApiData } from "../../lib/useApiData";
+
+const RESALE_PREVIEW = 3;
+
+// Tickets other fans are reselling for this event. Hidden entirely when
+// there are none (or the list fails to load) — it's an extra, not the
+// primary way to buy.
+function EventResaleTickets({ eventId }) {
+  const { data: listings } = useApiData(() => api.getResaleListings({ eventId }), [eventId]);
+  if (!listings?.length) return null;
+  return (
+    <section className="flex flex-col gap-2">
+      <div className="flex items-baseline justify-between">
+        <h3 className="text-h3 text-ink-primary">Resale tickets</h3>
+        <span className="text-caption text-ink-tertiary">{listings.length} from other fans</span>
+      </div>
+      <div className="flex flex-col gap-2">
+        {listings.slice(0, RESALE_PREVIEW).map((l) => <ResaleListingCard key={l.id} listing={l} compact />)}
+      </div>
+      {listings.length > RESALE_PREVIEW && (
+        <Link to={`/resale?event=${eventId}`} className="text-body-sm font-semibold text-brand-primary-on-tint hover:underline w-fit">
+          See all {listings.length} resale tickets
+        </Link>
+      )}
+    </section>
+  );
+}
 
 function TierRow({ tier, selected, onSelect }) {
   const soldOut = tier.tickets_remaining <= 0;
@@ -86,13 +114,14 @@ export default function EventDetail() {
 
   return (
     <div className="pb-28 lg:pb-10">
-      <div className="aspect-[21/9] sm:aspect-[3/1] relative" style={{ background: categoryGradient(event.category) }}>
+      <EventCover event={event} eager className="aspect-[21/9] sm:aspect-[3/1]">
         <div className="absolute inset-0 bg-gradient-to-t from-surface-base/90 to-transparent" />
         <div className="absolute bottom-0 left-0 right-0 mx-auto max-w-4xl px-4 lg:px-6 pb-5">
-          <Badge tone="brand" className="mb-2">{event.category}</Badge>
+          {/* Solid chip, not the tinted brand badge — it sits over arbitrary photos. */}
+          {event.category && <Badge className="mb-2 bg-black/55 text-white backdrop-blur-sm">{event.category}</Badge>}
           <h1 className="text-display font-bold text-white drop-shadow">{event.title}</h1>
         </div>
-      </div>
+      </EventCover>
 
       <div className="mx-auto max-w-4xl px-4 lg:px-6 mt-6 grid lg:grid-cols-[1fr_320px] gap-8">
         <div className="flex flex-col gap-6 min-w-0">
@@ -164,17 +193,23 @@ export default function EventDetail() {
             </a>
           </section>
 
+          <EventResaleTickets eventId={event.id} />
+
           <Card className="flex flex-col gap-2 border-chain-verified/30 bg-chain-verified/5">
             <div className="flex items-center gap-2">
               <ShieldCheck size={16} className="text-chain-verified" />
               <h3 className="text-h3 text-ink-primary">Resale policy</h3>
             </div>
-            <p className="text-body-sm text-ink-secondary">
-              Tickets for this event may be resold at a maximum of{" "}
-              <strong className="text-ink-primary">{Math.round(event.resale_ceiling_multiplier * 100)}% of face value</strong>. A{" "}
-              <strong className="text-ink-primary">{event.resale_royalty_percent}% royalty</strong> returns to the organiser on every
-              resale. These limits are enforced by smart contract and cannot be overridden.
-            </p>
+            {event.resale_enabled === false ? (
+              <p className="text-body-sm text-ink-secondary">The organiser has turned off resale for this event. Tickets can't be resold.</p>
+            ) : (
+              <p className="text-body-sm text-ink-secondary">
+                Tickets for this event may be resold at a maximum of{" "}
+                <strong className="text-ink-primary">{Math.round(event.resale_ceiling_multiplier * 100)}% of face value</strong>. A{" "}
+                <strong className="text-ink-primary">{event.resale_royalty_percent}% royalty</strong> returns to the organiser on every
+                resale. These limits are enforced by smart contract and cannot be overridden.
+              </p>
+            )}
           </Card>
         </div>
 

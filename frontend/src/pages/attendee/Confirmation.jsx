@@ -5,6 +5,7 @@ import { api } from "../../api";
 import { Card, Button, ChainBadge, Skeleton } from "../../components/ui";
 import { formatEventDate } from "../../format";
 import { markFirstPurchase } from "../../components/InstallPrompt";
+import EventCover from "../../components/EventCover";
 
 const BASESCAN_BASE = "https://sepolia.basescan.org/tx/";
 
@@ -50,7 +51,9 @@ export default function Confirmation() {
         <p className="text-body-sm text-ink-tertiary tabular-nums mt-1">Order #{detail.ticket_id.slice(0, 8).toUpperCase()}</p>
       </div>
 
-      <Card className="w-full flex flex-col gap-3 text-left">
+      <Card padding="p-0" className="w-full flex flex-col text-left overflow-hidden">
+        <EventCover event={detail} eager className="h-32" />
+        <div className="p-5 flex flex-col gap-3">
         <div>
           <h2 className="text-h3 text-ink-primary">{detail.event_title}</h2>
           <p className="text-body-sm text-ink-secondary">{detail.venue} · {formatEventDate(detail.event_date)}</p>
@@ -62,6 +65,7 @@ export default function Confirmation() {
             status={detail.chain_status}
             txUrl={detail.nft_tx_hash ? BASESCAN_BASE + detail.nft_tx_hash : undefined}
           />
+        </div>
         </div>
       </Card>
 

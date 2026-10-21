@@ -44,7 +44,7 @@ const NAV_GROUPS = [
 export default function AdminShell() {
   return (
     <ThemeProvider surfaceDefault="light">
-      <SidebarShell navGroups={NAV_GROUPS} roleLabel="Platform Admin" profilePath="/admin/admins" />
+      <SidebarShell navGroups={NAV_GROUPS} roleLabel="Platform Admin" profilePath="/admin/admins" surface="admin" />
     </ThemeProvider>
   );
 }

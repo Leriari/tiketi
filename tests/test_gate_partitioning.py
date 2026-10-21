@@ -121,21 +121,31 @@ def test_upload_records_admitted_and_denied_scans_with_reasons():
     ticket_id = _buy_ticket(headers, event["id"], "0799222004")
     token = _register_and_enroll(headers, event["id"], "device-upload-1", "Main Gate")
 
-    res = client.post("/api/v1/gate/scan-upload", json={"scans": [
+    batch = {"scans": [
         {"ticket_id": ticket_id, "granted": True, "reason_code": "GRANTED", "scanned_at": "2027-05-01T19:00:00"},
         {"ticket_id": "nonexistent-ticket", "granted": False, "reason_code": "UNKNOWN_TICKET", "scanned_at": "2027-05-01T19:01:00"},
-    ]}, headers={"Authorization": f"Bearer {token}"})
+        {"ticket_id": "forged-but-admitted", "granted": True, "reason_code": "GRANTED", "scanned_at": "2027-05-01T19:02:00"},
+    ]}
+    res = client.post("/api/v1/gate/scan-upload", json=batch, headers={"Authorization": f"Bearer {token}"})
     assert res.status_code == 200, res.text
     results = {r["ticket_id"]: r for r in res.json()}
     assert results[ticket_id]["status"] == "recorded"
     assert results["nonexistent-ticket"]["status"] == "recorded"
+    # An admission for a ticket that doesn't exist is reported, not stored.
+    assert results["forged-but-admitted"]["status"] == "conflict"
+
+    # Retrying the same batch doesn't double-record the unknown-ticket denial.
+    retry = {r["ticket_id"]: r for r in client.post("/api/v1/gate/scan-upload", json=batch, headers={"Authorization": f"Bearer {token}"}).json()}
+    assert retry["nonexistent-ticket"]["status"] == "duplicate"
 
     from app.models.models import Attendance, AttendanceStatus
     db = TestingSessionLocal()
     admitted = db.query(Attendance).filter(Attendance.ticket_id == ticket_id).first()
     assert admitted.status == AttendanceStatus.ADMITTED
     assert admitted.denial_reason is None
-    denied = db.query(Attendance).filter(Attendance.ticket_id == "nonexistent-ticket").first()
+    # Unknown tickets have no ticket row to point at; the raw id is kept.
+    denied = db.query(Attendance).filter(Attendance.scanned_ref == "nonexistent-ticket").first()
+    assert denied.ticket_id is None
     assert denied.status == AttendanceStatus.DENIED
     assert denied.denial_reason == "UNKNOWN_TICKET"
     db.close()

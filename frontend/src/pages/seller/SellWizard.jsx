@@ -4,7 +4,7 @@ import { ShieldCheck, CheckCircle2 } from "lucide-react";
 import { api, ApiError } from "../../api";
 import { TimelineStepper, Card, Button, MoneyText, Checkbox, EmptyState, ErrorState, Skeleton } from "../../components/ui";
 import { formatEventDate } from "../../format";
-import { categoryGradient } from "../../lib/categoryGradient";
+import EventCover from "../../components/EventCover";
 
 const STEPS = [{ label: "Choose ticket" }, { label: "Set price" }, { label: "Review" }, { label: "Listed" }];
 
@@ -113,7 +113,7 @@ export default function SellWizard() {
                   t.eligible ? "border-line hover:border-brand-primary bg-surface" : "border-line-subtle bg-surface-inset opacity-50 cursor-not-allowed"
                 }`}
               >
-                <div className="h-16" style={{ background: categoryGradient(t.category) }} />
+                <EventCover event={t} className="h-16" />
                 <div className="p-3 flex flex-col gap-0.5">
                   <p className="text-body-sm font-semibold text-ink-primary truncate">{t.event_title}</p>
                   <p className="text-caption text-ink-tertiary">{t.tier_name} · {formatEventDate(t.event_date)}</p>

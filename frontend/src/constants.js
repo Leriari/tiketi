@@ -2,8 +2,9 @@
 // backend need the same category list for events.
 export const CATEGORIES = ["Music", "Conference", "Comedy", "Sports", "Arts"];
 
-// No smart contract is deployed anywhere for this project (see backend
-// audit). Pages that render on-chain-looking data (contract address, tx
-// hashes, gas cost, mint status) gate a "simulated data" banner on this
-// flag so it disappears automatically once a real deployment exists.
-export const CONTRACT_DEPLOYED = false;
+// Pages that render on-chain data (contract address, tx hashes, mint
+// status) show a "simulated data" banner when this is false. The mock
+// backend invents those values; the real backend mints on a deployed
+// contract (Base Sepolia), so its data is real. Read straight from the env
+// rather than importing api.js, which would make a circular import.
+export const CONTRACT_DEPLOYED = (import.meta.env.VITE_USE_MOCK ?? "true") === "false";

@@ -220,3 +220,18 @@ def test_app_starts_fine_with_inbox_channel_in_development():
         CREDENTIAL_ENCRYPTION_KEY=Fernet.generate_key().decode(),
         OTP_DELIVERY_CHANNEL="inbox",
     )
+
+
+def test_redis_outage_returns_clear_503_not_bare_500(monkeypatch):
+    # A dead Redis must surface as a readable 503 (which passes back through
+    # CORS), not an unhandled 500 the browser reports as "Failed to fetch".
+    import redis
+    from app.services import auth_service
+
+    def _down(*args, **kwargs):
+        raise redis.exceptions.ConnectionError("Connection refused")
+
+    monkeypatch.setattr(auth_service, "store_otp", _down)
+    res = client.post("/api/v1/auth/request-otp", json={"phone_number": "0712999001"})
+    assert res.status_code == 503
+    assert "Redis" in res.json()["detail"]

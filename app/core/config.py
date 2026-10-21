@@ -36,6 +36,25 @@ class Settings(BaseSettings):
             return "https://api.safaricom.co.ke"
         return "https://sandbox.safaricom.co.ke"
 
+    # Firebase Authentication (optional): real SMS codes for phone login,
+    # plus Google sign-in. Values from Firebase console -> Project settings
+    # -> General -> "Your apps" (web app config). None of these are secrets —
+    # the frontend reads them from GET /. Unset = phone codes come from this
+    # backend's own OTP flow (dev inbox/console) and there's no Google option.
+    FIREBASE_PROJECT_ID: str = ""
+    FIREBASE_API_KEY: str = ""
+    FIREBASE_AUTH_DOMAIN: str = ""
+    FIREBASE_APP_ID: str = ""
+    # Send phone codes by real SMS through Firebase. Needs the Phone provider
+    # enabled in Firebase (Authentication -> Sign-in method), which in turn
+    # needs the Blaze (billing) plan. Off = phone codes use this backend's
+    # own OTP flow, while Google sign-in still goes through Firebase.
+    FIREBASE_PHONE_AUTH: bool = False
+
+    @property
+    def FIREBASE_CONFIGURED(self) -> bool:
+        return bool(self.FIREBASE_PROJECT_ID and self.FIREBASE_API_KEY)
+
     # JWT
     JWT_ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 60
@@ -48,6 +67,39 @@ class Settings(BaseSettings):
     # up rather than silently pretending one exists. See
     # app/services/otp_delivery.py.
     OTP_DELIVERY_CHANNEL: str = "console"
+    # disabled: no way to send codes (no SMS gateway) — only DEMO_PHONE_CODES
+    # numbers can use phone login; everyone else uses Google.
+
+    # Fixed codes for a few demo numbers, for a public demo with no SMS:
+    # "0700000001:482913,0700000002:771204". Treat like passwords.
+    DEMO_PHONE_CODES: str = ""
+
+    # How a Google user's phone number is confirmed the first time:
+    #   sms        — a one-time code to that phone (needs real code delivery)
+    #   unverified — the number is recorded unverified (default M-Pesa
+    #                number only), for deployments with no SMS
+    GOOGLE_PHONE_CONFIRMATION: str = "sms"
+
+    # The "Simulate M-Pesa success" button, outside development too. Only
+    # ever sensible against the Daraja *sandbox*.
+    ALLOW_SIMULATED_PAYMENTS: bool = False
+
+    # Comma-separated browser origins allowed to call the API, e.g.
+    # "https://tiketi-6e9fd.web.app". Empty: "*" when DEBUG, otherwise none.
+    CORS_ORIGINS: str = ""
+
+    @property
+    def demo_phone_codes(self) -> dict[str, str]:
+        from app.schemas.schemas import normalize_kenyan_phone
+        codes = {}
+        for pair in filter(None, (p.strip() for p in self.DEMO_PHONE_CODES.split(","))):
+            phone, _, code = pair.partition(":")
+            codes[normalize_kenyan_phone(phone.strip())] = code.strip()
+        return codes
+
+    @property
+    def simulated_payments(self) -> bool:
+        return self.APP_ENV == "development" or self.ALLOW_SIMULATED_PAYMENTS
 
     # TOTP
     TOTP_ISSUER: str = "TiketiKE"
@@ -84,6 +136,11 @@ class Settings(BaseSettings):
                 "OTP_DELIVERY_CHANNEL=inbox is only permitted when "
                 "APP_ENV=development — refusing to start."
             )
+        if self.GOOGLE_PHONE_CONFIRMATION not in ("sms", "unverified"):
+            raise ValueError("GOOGLE_PHONE_CONFIRMATION must be 'sms' or 'unverified'")
+        for phone, code in self.demo_phone_codes.items():
+            if not (code.isdigit() and len(code) == 6):
+                raise ValueError(f"DEMO_PHONE_CODES: the code for {phone} must be 6 digits")
         return self
 
 

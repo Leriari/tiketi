@@ -6,7 +6,7 @@ import { useApiData } from "../../lib/useApiData";
 import { Select, Badge, Skeleton, EmptyState, ErrorState, Button, MoneyText } from "../../components/ui";
 import { formatEventDate } from "../../format";
 import { CATEGORIES } from "../../constants";
-import { categoryGradient } from "../../lib/categoryGradient";
+import EventCover from "../../components/EventCover";
 
 const PAGE_SIZE = 6;
 const SORTS = [
@@ -173,11 +173,11 @@ export default function Browse() {
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
           {shown?.map((ev) => (
             <button key={ev.id} onClick={() => navigate(`/events/${ev.id}`)} className="text-left rounded-md border border-line-subtle bg-surface hover:border-line-strong transition-colors duration-150 overflow-hidden">
-              <div className="aspect-[16/9] relative" style={{ background: categoryGradient(ev.category) }}>
+              <EventCover event={ev} className="aspect-[16/9]">
                 <div className="absolute top-2 left-2">
                   <AvailabilityBadge availability={ev.availability} />
                 </div>
-              </div>
+              </EventCover>
               <div className="p-3 flex flex-col gap-1">
                 <h2 className="text-h3 text-ink-primary truncate">{ev.title}</h2>
                 <p className="text-caption text-ink-tertiary truncate">{ev.venue}</p>

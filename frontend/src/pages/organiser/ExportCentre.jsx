@@ -59,8 +59,17 @@ export default function ExportCentre() {
           { key: "format", header: "Format", render: (r) => <span className="uppercase">{r.format}</span> },
           { key: "status", header: "Status", render: (r) => <Badge tone="success">{r.status}</Badge> },
           { key: "requested_at", header: "Requested", render: (r) => <span className="tabular-nums">{new Date(r.requested_at).toLocaleString("en-KE", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}</span> },
-          { key: "download", header: <span className="sr-only">Download</span>, render: () => (
-            <button onClick={() => toast.push("File download isn't wired to a real export pipeline in this preview.", { tone: "info" })} className="inline-flex items-center gap-1 text-caption font-semibold text-brand-primary-on-tint">
+          { key: "download", header: <span className="sr-only">Download</span>, render: (r) => (
+            <button
+              onClick={async () => {
+                try {
+                  await api.downloadExport(r.id);
+                } catch (err) {
+                  toast.push(err instanceof ApiError ? err.message : "Couldn't download that export.", { tone: "danger" });
+                }
+              }}
+              className="inline-flex items-center gap-1 text-caption font-semibold text-brand-primary-on-tint"
+            >
               <Download size={13} /> Download
             </button>
           ) },

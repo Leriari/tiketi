@@ -132,7 +132,7 @@ export default function Earnings() {
               { key: "royalties", header: "Resale royalties", render: (r) => <MoneyText value={r.resale_royalties_kes} variant="positive" /> },
               { key: "fees", header: "Fees", render: (r) => <MoneyText value={r.fees_kes} variant="negative" /> },
               { key: "net", header: "Net", render: (r) => <MoneyText value={r.net_kes} variant="positive" /> },
-              { key: "status", header: "Payout status", render: (r) => <Badge tone={r.payout_status === "Paid out" ? "success" : "warning"}>{r.payout_status}</Badge> },
+              { key: "status", header: "Payout status", render: (r) => <Badge tone={r.payout_status === "Paid out" || r.payout_status === "Available" ? "success" : "warning"}>{r.payout_status}</Badge> },
             ]}
           />
         )}

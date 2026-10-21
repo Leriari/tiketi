@@ -23,7 +23,7 @@ export default function ScannerShell() {
 
   return (
     <ThemeProvider surfaceDefault="dark">
-      <main className="min-h-screen bg-surface-base text-ink-primary">
+      <main className="min-h-screen app-backdrop text-ink-primary">
         <Outlet />
       </main>
     </ThemeProvider>

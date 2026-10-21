@@ -26,6 +26,7 @@ def _member_out(member: OrganizerMember) -> MemberOut:
         id=member.id,
         account_id=member.account_id,
         phone_number=member.user.phone_number if member.user else "",
+        display_name=member.user.display_name if member.user else None,
         role=member.role.value,
         created_at=member.created_at,
     )
@@ -88,6 +89,8 @@ def invite_member(
     Owner-only. Creates the user account if this is their first contact
     with the platform, same as auth does at verify-otp/login."""
     invitee = get_or_create_user(db, body.phone_number)
+    if body.name and body.name.strip() and not invitee.display_name:
+        invitee.display_name = body.name.strip()[:100]
 
     existing = (
         db.query(OrganizerMember)

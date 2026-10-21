@@ -3,7 +3,7 @@ import { Link } from "react-router-dom";
 import { api } from "../../api";
 import { Tabs, Badge, EmptyState, Skeleton } from "../../components/ui";
 import { formatEventDate } from "../../format";
-import { categoryGradient } from "../../lib/categoryGradient";
+import EventCover from "../../components/EventCover";
 
 const STATUS_TONE = { active: "success", used: "neutral", cancelled: "danger", resale: "warning", pending_payment: "warning" };
 const STATUS_LABEL = { active: "Active", used: "Used", cancelled: "Refunded", resale: "Listed", pending_payment: "Awaiting payment" };
@@ -68,7 +68,7 @@ export default function MyTickets() {
         {rows.map((t) => {
           const inner = (
             <div className="flex items-center gap-3 rounded-md border border-line-subtle bg-surface p-3 hover:border-line-strong transition-colors duration-150">
-              <div className="h-16 w-16 rounded-sm flex-none" style={{ background: categoryGradient(t.event.category) }} />
+              <EventCover event={t.event} className="h-16 w-16 rounded-sm flex-none" />
               <div className="min-w-0 flex-1">
                 <p className="text-body font-semibold text-ink-primary truncate">{t.event.title}</p>
                 <p className="text-caption text-ink-tertiary truncate">{t.event.venue}</p>

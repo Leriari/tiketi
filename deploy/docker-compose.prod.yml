@@ -1,0 +1,97 @@
+# The whole backend on one server (Oracle Cloud Always Free).
+#
+#   cd ~/tiketi/deploy && docker compose -f docker-compose.prod.yml up -d --build
+#
+# caddy   — HTTPS (automatic Let's Encrypt certificate) in front of the API
+# api     — FastAPI; runs pending database migrations on every start
+# worker  — Celery: NFT minting and resale settlement (one at a time, so
+#           blockchain transactions from the shared wallet never collide)
+# redis   — login codes, rate limits, the worker's job queue
+# db      — Postgres; data lives in the db_data volume
+# backup  — dumps the database to ./backups once a day, keeps 14 days
+#
+# Everything reads its settings from .env.production (made by make_env.py).
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      API_DOMAIN: ${API_DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+
+  api:
+    build: ..
+    restart: unless-stopped
+    env_file: .env.production
+    # One line on purpose: a multi-line YAML block kept the line breaks, and
+    # the shell ran the proxy flags as a separate (failing) command — so every
+    # request looked like it came from Caddy and per-IP rate limits became
+    # one limit shared by the whole site.
+    command: ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2 --proxy-headers --forwarded-allow-ips=*"]
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  worker:
+    build: ..
+    restart: unless-stopped
+    env_file: .env.production
+    command: celery -A app.worker worker --loglevel=info -Q celery,blockchain --concurrency=1
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: redis-server --appendonly yes
+    volumes:
+      - redis_data:/data
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tiketi
+      POSTGRES_DB: tiketi
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tiketi"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  backup:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./backups:/backups
+    # First dump 10 minutes after start (the API creates/migrates the tables
+    # on start — dumping straight away captured an empty database), then daily.
+    entrypoint: ["sh", "-c", "sleep 600; while true; do pg_dump -h db -U tiketi tiketi | gzip > /backups/tiketi-$$(date +%F).sql.gz && find /backups -name 'tiketi-*.sql.gz' -mtime +14 -delete; sleep 86400; done"]
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  caddy_data:
+  caddy_config:
+  redis_data:
+  db_data:
