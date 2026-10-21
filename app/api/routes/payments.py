@@ -132,6 +132,19 @@ async def purchase_ticket(
     if not tier:
         raise HTTPException(status_code=400, detail="Event has no ticket tier configured")
 
+    # Organiser Console tier rules: hidden/password tiers aren't on public
+    # sale (they're handed out as complimentary tickets), and a tier can
+    # have its own sales window and per-order limit.
+    if (tier.visibility or "public") != "public":
+        raise HTTPException(status_code=400, detail="This ticket tier isn't on public sale")
+    now_naive = datetime.utcnow()
+    if tier.sales_start and now_naive < tier.sales_start:
+        raise HTTPException(status_code=400, detail="Sales for this ticket tier haven't opened yet")
+    if tier.sales_end and now_naive > tier.sales_end:
+        raise HTTPException(status_code=400, detail="Sales for this ticket tier have closed")
+    if tier.per_order_max and body.quantity > tier.per_order_max:
+        raise HTTPException(status_code=400, detail=f"You can buy at most {tier.per_order_max} tickets in this tier per order")
+
     if tier.tickets_remaining < body.quantity:
         raise HTTPException(status_code=400, detail="Not enough tickets remaining in this tier")
 
@@ -235,6 +248,18 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
             logger.warning(f"No payment found for CheckoutRequestID: {checkout_id}")
             return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
+        # Each payment is resolved exactly once. Daraja can deliver the same
+        # callback twice, and a resale purchase that timed out has already
+        # been released to other buyers — re-running success here would
+        # double-count tickets or hand over a ticket that's no longer theirs.
+        if payment.status != PaymentStatus.INITIATED:
+            if parsed["success"]:
+                logger.error(
+                    f"M-Pesa success for payment {payment.id} that is already {payment.status.value} "
+                    f"(receipt {parsed.get('receipt_number')}) — not applied; needs a manual refund check."
+                )
+            return {"ResultCode": 0, "ResultDesc": "Accepted"}
+
         minted_tickets = []
         paid_transfer = None
 
@@ -319,7 +344,7 @@ def dev_confirm_payment(
     outside development regardless of that, since include_in_schema only hides
     a route, it doesn't disable it.
     """
-    if settings.APP_ENV != "development":
+    if not settings.simulated_payments:
         raise HTTPException(status_code=404, detail="Not found")
 
     payment = (

@@ -149,6 +149,9 @@ def upgrade() -> None:
     sa.ForeignKeyConstraint(['ticket_id'], ['tickets.id'], ),
     sa.PrimaryKeyConstraint('id')
     )
+    # Postgres: adding a column (unlike creating a table) doesn't create its
+    # enum type, so create it first. A no-op on SQLite, which has no enum types.
+    sa.Enum('DRAFT', 'PUBLISHED', 'CANCELLED', 'COMPLETED', name='eventstatus').create(op.get_bind(), checkfirst=True)
     with op.batch_alter_table('events', schema=None) as batch_op:
         batch_op.add_column(sa.Column('organizer_id', sa.String(length=36), nullable=True))
         # server_default backfills any existing rows (e.g. local dev.db) — matches the

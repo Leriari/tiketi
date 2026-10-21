@@ -1,5 +1,5 @@
 import { FileText, Download } from "lucide-react";
-import { api } from "../../api";
+import { api, ApiError } from "../../api";
 import { useApiData } from "../../lib/useApiData";
 import { useToast } from "../../components/ui/Toast";
 import { Card, EmptyState, ErrorState, Skeleton } from "../../components/ui";
@@ -28,7 +28,16 @@ export default function Reports() {
               <p className="text-caption text-ink-tertiary">Generated {new Date(r.generated_at).toLocaleDateString("en-KE", { day: "2-digit", month: "short", year: "numeric" })}</p>
             </div>
           </div>
-          <button onClick={() => toast.push("Report download isn't wired to a real file in this preview.", { tone: "info" })} className="inline-flex items-center gap-1 text-caption font-semibold text-brand-primary-on-tint flex-none">
+          <button
+            onClick={async () => {
+              try {
+                await api.downloadReport(r.id);
+              } catch (err) {
+                toast.push(err instanceof ApiError ? err.message : "Couldn't download that report.", { tone: "danger" });
+              }
+            }}
+            className="inline-flex items-center gap-1 text-caption font-semibold text-brand-primary-on-tint flex-none"
+          >
             <Download size={13} /> Download
           </button>
         </Card>

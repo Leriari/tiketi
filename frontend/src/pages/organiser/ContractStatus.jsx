@@ -61,13 +61,17 @@ export default function ContractStatus() {
               </div>
               <ChainBadge status="verified" txUrl={`https://sepolia.basescan.org/address/${data.contract_address}`} />
             </div>
-            <p className="text-caption text-ink-tertiary">{data.network} · deployed {new Date(data.deployed_at).toLocaleDateString("en-KE", { day: "2-digit", month: "short", year: "numeric" })}</p>
+            <p className="text-caption text-ink-tertiary">
+              {data.network}
+              {data.deployed_at && ` · deployed ${new Date(data.deployed_at).toLocaleDateString("en-KE", { day: "2-digit", month: "short", year: "numeric" })}`}
+              {data.blockchain_configured === false && " · minting is not configured on the server"}
+            </p>
           </Card>
 
           <div className="grid grid-cols-2 sidebar:grid-cols-4 gap-3">
             <StatCard label="Resale cap" value={`${data.resale_cap_percent}%`} />
             <StatCard label="Royalty" value={`${data.royalty_percent}%`} />
-            <StatCard label="Avg. gas cost" value={`$${data.avg_gas_cost_usd.toFixed(3)}`} />
+            <StatCard label="Avg. gas cost" value={data.avg_gas_cost_usd == null ? "Not tracked" : `$${data.avg_gas_cost_usd.toFixed(3)}`} />
             <StatCard label="Pending mints" value={data.pending_mints} />
           </div>
 

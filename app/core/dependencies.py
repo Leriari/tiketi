@@ -26,4 +26,7 @@ def get_current_user(
     user = db.query(User).filter(User.id == user_id, User.is_active == True).first()
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found")
+    # Signed out everywhere since this token was issued.
+    if payload.get("sv", 0) != (user.session_version or 0):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session ended. Please sign in again.")
     return user

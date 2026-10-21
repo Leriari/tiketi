@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 import { Plus, X, GripVertical, ArrowUp, ArrowDown, Trash2 } from "lucide-react";
 import { api, ApiError } from "../../api";
 import { useToast } from "../../components/ui/Toast";
@@ -8,6 +8,7 @@ import {
 } from "../../components/ui";
 import { CATEGORIES } from "../../constants";
 import { categoryGradient } from "../../lib/categoryGradient";
+import { eventImageUrl } from "../../lib/eventImage";
 
 const STATUSES = ["draft", "live", "paused", "sold_out", "cancelled"];
 const VISIBILITIES = ["public", "hidden", "password"];
@@ -31,7 +32,11 @@ export default function EventManagement() {
   const [venue, setVenue] = useState("");
   const [artistInput, setArtistInput] = useState("");
   const [artists, setArtists] = useState([]);
+  // What the preview shows: the saved image's URL, or a newly picked file
+  // as a data: URL. Only a changed image is sent on save (imageChanged),
+  // so editing other fields never re-uploads it.
   const [imageDataUrl, setImageDataUrl] = useState(null);
+  const [imageChanged, setImageChanged] = useState(false);
   const [startsAt, setStartsAt] = useState("");
   const [endsAt, setEndsAt] = useState("");
   const [description, setDescription] = useState("");
@@ -52,7 +57,8 @@ export default function EventManagement() {
       setCategory(ev.category);
       setVenue(ev.venue);
       setArtists(ev.artists || []);
-      setImageDataUrl(ev.image_data_url);
+      setImageDataUrl(eventImageUrl(ev));
+      setImageChanged(false);
       setStartsAt(ev.event_date?.slice(0, 16) || "");
       setEndsAt(ev.ends_at?.slice(0, 16) || "");
       setDescription(ev.description_html || ev.description || "");
@@ -66,7 +72,11 @@ export default function EventManagement() {
       setTiers(ev.tiers.map((t) => ({ key: crypto.randomUUID(), ...t, price: String(t.price), capacity: String(t.capacity) })));
       setGates(ev.gates.map((g) => ({ key: crypto.randomUUID(), ...g })));
       setLoaded(true);
+    }).catch((err) => {
+      toast.push(err instanceof ApiError ? err.message : "Couldn't load this event.", { tone: "danger" });
+      navigate("/organiser", { replace: true });
     });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [eventId, isEdit]);
 
   function markDirty(setter) {
@@ -89,7 +99,9 @@ export default function EventManagement() {
 
   function handleBack() {
     if (dirty && !window.confirm("You have unsaved changes. Leave this page anyway?")) return;
-    navigate(-1);
+    // Always the events list — navigate(-1) left the app when the page was
+    // opened directly or in a new tab.
+    navigate("/organiser/events");
   }
 
   function addArtist(e) {
@@ -125,7 +137,7 @@ export default function EventManagement() {
       category,
       venue,
       artists,
-      image_data_url: imageDataUrl,
+      ...(imageChanged ? { image_data_url: imageDataUrl } : {}),
       event_date: startsAt,
       ends_at: endsAt || null,
       description,
@@ -165,6 +177,7 @@ export default function EventManagement() {
       const payload = buildPayload(nextStatus);
       const result = isEdit ? await api.updateEvent(eventId, payload) : await api.createEvent(payload);
       setDirty(false);
+      setImageChanged(false);
       toast.push(isEdit ? "Event updated." : "Event published.", { tone: "success" });
       navigate(`/organiser/events/${result.id}/edit`, { replace: true });
     } catch (err) {
@@ -180,6 +193,11 @@ export default function EventManagement() {
 
   return (
     <div className="mx-auto max-w-6xl px-4 lg:px-6 py-6">
+      <nav aria-label="Breadcrumb" className="text-body-sm text-ink-tertiary mb-1">
+        <Link to="/organiser/events" className="hover:text-ink-primary">Events</Link>
+        <span aria-hidden="true"> / </span>
+        <span className="text-ink-secondary">{isEdit ? title || "Edit" : "New event"}</span>
+      </nav>
       <h1 className="text-h1 text-ink-primary mb-6">{isEdit ? "Edit event" : "Create an event"}</h1>
 
       <div className="grid lg:grid-cols-[300px_1fr] gap-8">
@@ -233,8 +251,10 @@ export default function EventManagement() {
 
             <FileDropzone
               label="Event Image"
+              value={imageDataUrl && !imageDataUrl.startsWith("data:") ? imageDataUrl : null}
               onFile={(f) => {
                 setDirty(true);
+                setImageChanged(true);
                 if (!f) return setImageDataUrl(null);
                 const reader = new FileReader();
                 reader.onload = () => setImageDataUrl(reader.result);

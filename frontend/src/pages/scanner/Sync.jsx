@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { ScanLine, HardDrive, Clock, CalendarRange, KeyRound, Smartphone } from "lucide-react";
 import { api, ApiError } from "../../api";
 import { useToast } from "../../components/ui/Toast";
@@ -9,6 +9,7 @@ import {
   replaceCredentials, wipeAll, maybeAutoWipe,
 } from "../../scanner/credentialStore";
 import { getDeviceInfo, setDeviceInfo, clearDeviceInfo } from "../../scanner/deviceAuth";
+import BrandMark from "../../components/BrandMark";
 
 function formatWhen(iso) {
   return new Date(iso).toLocaleString("en-KE", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
@@ -135,7 +136,7 @@ export default function Sync() {
   return (
     <div className="min-h-screen flex flex-col px-5 py-8 max-w-md mx-auto">
       <div className="flex items-center gap-2.5 mb-1">
-        <span className="h-9 w-9 rounded-md bg-brand-accent flex items-center justify-center text-brand-accent-ink font-black flex-none">C</span>
+        <Link to="/" title="Home" className="rounded-md"><BrandMark size={36} /></Link>
         <h1 className="text-h2 text-ink-primary font-bold">Scanner</h1>
       </div>
       <p className="text-body-sm text-ink-tertiary mb-8">

@@ -7,6 +7,7 @@ import {
   QRDisplay, CountdownRing, Badge, Button, Drawer, Input, Skeleton, ErrorState,
 } from "../../components/ui";
 import { formatPhone } from "../../format";
+import EventCover from "../../components/EventCover";
 
 const ROTATION_S = 30;
 const BRIGHTNESS_DISMISSED_KEY = "chaintix_brightness_prompt_seen";
@@ -85,7 +86,8 @@ export default function TicketCredential() {
       )}
 
       <div className="flex items-start justify-between gap-3">
-        <div>
+        <EventCover event={detail} eager className="h-14 w-14 rounded-md flex-none" />
+        <div className="flex-1 min-w-0">
           <h1 className="text-h1 text-ink-primary">{detail.event_title}</h1>
           <p className="text-body-sm text-ink-secondary">{detail.venue}</p>
           {detail.gate_assignment && <p className="text-caption text-ink-tertiary mt-0.5">Enter via {detail.gate_assignment}</p>}

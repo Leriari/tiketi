@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Download } from "lucide-react";
 import { Drawer, Button } from "./ui";
+import BrandMark from "./BrandMark";
 
 const HAS_PURCHASED_KEY = "chaintix_has_purchased";
 const DISMISSED_KEY = "chaintix_install_prompt_dismissed";
@@ -52,7 +53,7 @@ export default function InstallPrompt() {
   return (
     <Drawer open={open} onClose={dismiss} side="bottom">
       <div className="flex items-center gap-3">
-        <span className="flex h-11 w-11 flex-none items-center justify-center rounded-md bg-brand-accent text-brand-accent-ink font-black">C</span>
+        <BrandMark size={44} />
         <div className="flex-1">
           <p className="text-body font-semibold text-ink-primary">Install ChainTix</p>
           <p className="text-caption text-ink-tertiary">Get your tickets in one tap, even offline at the gate.</p>

@@ -43,7 +43,7 @@ export default function OrganisationProfile() {
 
       <Card className="flex items-center justify-between">
         <div>
-          <p className="text-body-sm font-semibold text-ink-primary">{user?.phone}</p>
+          <p className="text-body-sm font-semibold text-ink-primary">{user?.phoneNumber}</p>
           <p className="text-caption text-ink-tertiary">Signed in</p>
         </div>
         <button onClick={logout} className="text-body-sm font-semibold text-danger">Log out</button>

@@ -1,0 +1,21 @@
+# Keep the image to the backend only, and never bake in secrets or local data.
+.env
+.env.*
+!.env.example
+deploy/.env.production
+deploy/backups/
+*.db
+*.db.bak*
+*.sqlite3
+venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.git/
+.claude/
+frontend/
+contracts/
+docs/
+tests/
+*.log

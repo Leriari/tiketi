@@ -1,15 +1,20 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy.orm import Session
 from typing import List
 
 from app.db.session import get_db
-from app.models.models import Event, EventTier, EventStatus, TierStatus, OrganizerRole
-from app.schemas.schemas import EventCreate, EventOut
+from app.models.models import Event, EventStatus, OrganizerRole, Organizer
+from app.schemas.schemas import EventCreate, EventUpdate, EventOut
 from app.core.dependencies import get_current_user
-from app.core.authz import check_org_role
+from app.core.authz import check_org_role, require_event_org_role
 from app.models.models import User
+from app.services import organiser_service
 
 router = APIRouter(prefix="/events", tags=["Events"])
+
+# What the public can see. Drafts and paused events are the organiser's
+# alone; sold-out events stay listed so people can see them.
+_PUBLIC_STATUSES = (EventStatus.PUBLISHED, EventStatus.SOLD_OUT)
 
 
 @router.post("/", response_model=EventOut, status_code=status.HTTP_201_CREATED)
@@ -25,41 +30,34 @@ def create_event(
     create; STAFF is a scoped, view-and-scan-only role (see
     app/core/authz.py).
 
-    Pricing/capacity/resale rules are stored on a single "General" EventTier —
-    Event itself only holds venue-wide totals. The request/response API stays
-    flat for now; multi-tier events are a Phase 2 API change.
+    Takes the Organiser Console's full form (multiple tiers, gates, resale
+    settings, draft/live status) or the original flat single-tier payload
+    (ticket_price_kes + total_capacity) — see organiser_service.create_event.
     """
     check_org_role(db, current_user.id, body.organization_id, OrganizerRole.OWNER)
 
-    event = Event(
-        organizer_id=body.organization_id,
-        title=body.title,
-        description=body.description,
-        venue=body.venue,
-        event_date=body.event_date,
-        organizer_phone=body.organizer_phone,
-        total_capacity=body.total_capacity,
-        status=EventStatus.PUBLISHED,
-        created_by_user_id=current_user.id,
-    )
-    db.add(event)
-    db.flush()  # get event.id without committing
-
-    tier = EventTier(
-        event_id=event.id,
-        tier_name="General",
-        price_kes=body.ticket_price_kes,
-        capacity=body.total_capacity,
-        resale_floor_price_kes=body.ticket_price_kes,
-        resale_ceiling_price_kes=round(body.ticket_price_kes * body.max_resale_multiplier, 2),
-        organizer_royalty_percent=body.resale_royalty_percent,
-        status=TierStatus.ACTIVE,
-    )
-    db.add(tier)
-
+    event = organiser_service.create_event(db, body, current_user)
     db.commit()
     db.refresh(event)
     return event
+
+
+@router.patch("/{event_id}")
+def update_event(
+    body: EventUpdate,
+    event: Event = Depends(require_event_org_role(OrganizerRole.OWNER)),
+    db: Session = Depends(get_db),
+):
+    """
+    Edit an event (Organiser Console → Event Management). Owner only.
+    Price/resale changes apply to tickets sold from now on: a ticket's
+    on-chain resale cap and royalty were fixed when it was minted.
+    """
+    organiser_service.apply_event_details(db, event, body, creating=False)
+    db.commit()
+    db.refresh(event)
+    organisation = db.query(Organizer).filter(Organizer.id == event.organizer_id).first()
+    return organiser_service.event_out(event, organisation)
 
 
 @router.get("/", response_model=List[EventOut])
@@ -68,10 +66,10 @@ def list_events(
     limit: int = 20,
     db: Session = Depends(get_db),
 ):
-    """List all published events."""
+    """List all public (published or sold-out) events."""
     events = (
         db.query(Event)
-        .filter(Event.status == EventStatus.PUBLISHED)
+        .filter(Event.status.in_(_PUBLIC_STATUSES))
         .order_by(Event.event_date)
         .offset(skip)
         .limit(limit)
@@ -80,9 +78,35 @@ def list_events(
     return events
 
 
+@router.get("/{event_id}/image")
+def get_event_image(event_id: str, request: Request, db: Session = Depends(get_db)):
+    """
+    The event's cover image. Public and unauthenticated (an <img> tag can't
+    send a token), served for any event status — a cover image isn't
+    sensitive, and the organiser's own draft preview needs it too.
+    The URL carries ?v=<upload time> (Event.image_url), so it's cached as
+    immutable: a new upload changes the URL rather than the bytes behind it.
+    """
+    event = db.query(Event).filter(Event.id == event_id).first()
+    if not event or not event.image_mime:
+        raise HTTPException(status_code=404, detail="This event has no image")
+    etag = f'"{event.id}-{int(event.image_updated_at.timestamp()) if event.image_updated_at else 0}"'
+    if request.headers.get("if-none-match") == etag:
+        return Response(status_code=304, headers={"ETag": etag})
+    return Response(
+        content=event.image_data,
+        media_type=event.image_mime,
+        headers={"Cache-Control": "public, max-age=31536000, immutable", "ETag": etag},
+    )
+
+
 @router.get("/{event_id}", response_model=EventOut)
 def get_event(event_id: str, db: Session = Depends(get_db)):
-    event = db.query(Event).filter(Event.id == event_id).first()
+    event = (
+        db.query(Event)
+        .filter(Event.id == event_id, Event.status.in_(_PUBLIC_STATUSES + (EventStatus.COMPLETED,)))
+        .first()
+    )
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
     return event

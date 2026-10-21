@@ -11,15 +11,22 @@ from sqlalchemy.pool import StaticPool
 from app.main import app
 from app.db.session import Base, get_db
 
-# ── In-memory SQLite for tests (fresh DB each run, no persistence) ─────────────
-TEST_DB_URL = "sqlite://"   # pure in-memory; destroyed when engine is disposed
-from sqlalchemy.pool import StaticPool
+# ── Test database ──────────────────────────────────────────────────────────────
+# In-memory SQLite by default (fresh each run). Set TEST_DATABASE_URL to a
+# throwaway Postgres to run the same suite against production's database
+# engine — its tables are dropped and recreated per module.
+import os
 
-test_engine = create_engine(
-    TEST_DB_URL,
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,  # keeps one connection alive so in-memory DB persists
-)
+TEST_DB_URL = os.environ.get("TEST_DATABASE_URL", "sqlite://")
+
+if TEST_DB_URL.startswith("sqlite"):
+    test_engine = create_engine(
+        TEST_DB_URL,
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,  # keeps one connection alive so in-memory DB persists
+    )
+else:
+    test_engine = create_engine(TEST_DB_URL)
 TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=test_engine)
 
 

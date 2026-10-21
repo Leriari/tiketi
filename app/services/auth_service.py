@@ -119,12 +119,14 @@ def get_or_create_user(db: Session, phone_number: str) -> User:
     return user
 
 
-def create_access_token(user_id: str, phone_number: str) -> str:
-    """Issue a JWT access token."""
+def create_access_token(user_id: str, phone_number: str, session_version: int = 0) -> str:
+    """Issue a JWT access token. `sv` ties it to the user's session_version
+    so "sign out everywhere" can invalidate every earlier token."""
     expire = datetime.now(timezone.utc) + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
     payload = {
         "sub": user_id,
         "phone": phone_number,
+        "sv": session_version,
         "exp": expire,
     }
     return jwt.encode(payload, settings.SECRET_KEY, algorithm=settings.JWT_ALGORITHM)
@@ -133,3 +135,74 @@ def create_access_token(user_id: str, phone_number: str) -> str:
 def decode_token(token: str) -> dict:
     """Decode and validate a JWT. Raises JWTError on failure."""
     return jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.JWT_ALGORITHM])
+
+
+# ── Firebase sign-in (phone SMS + Google) ────────────────────────────────────
+# Firebase proves who someone is: a phone number it sent an SMS code to, or
+# a Google account. Everything in this platform (M-Pesa, team invites,
+# ticket ownership) keys off a verified phone, so a Google account is only
+# ever *linked* to a phone-verified user: the first time, POST
+# /auth/firebase hands back a short-lived link token, and the follow-up
+# phone sign-in passes it back to attach the Google account to that phone's
+# user (created if new).
+
+GOOGLE_LINK_TTL = timedelta(minutes=10)
+
+
+def verify_firebase_token(token: str) -> dict:
+    """Validate a Firebase Authentication ID token against Google's keys and
+    this project. Returns its claims; raises ValueError if it's forged,
+    expired, or from another Firebase project."""
+    from google.oauth2 import id_token
+    from google.auth.transport import requests as google_requests
+
+    claims = id_token.verify_firebase_token(token, google_requests.Request(), audience=settings.FIREBASE_PROJECT_ID)
+    if not claims or claims.get("iss") != f"https://securetoken.google.com/{settings.FIREBASE_PROJECT_ID}":
+        raise ValueError("Wrong issuer")
+    return claims
+
+
+def _link_key() -> str:
+    # A different key from access tokens, so a link token can never be
+    # accepted as a session (and vice versa).
+    return f"{settings.SECRET_KEY}:google-link"
+
+
+def create_google_link_token(google_sub: str, email: str | None) -> str:
+    payload = {
+        "typ": "google_link",
+        "google_sub": google_sub,
+        "email": email,
+        "exp": datetime.now(timezone.utc) + GOOGLE_LINK_TTL,
+    }
+    return jwt.encode(payload, _link_key(), algorithm=settings.JWT_ALGORITHM)
+
+
+def decode_google_link_token(token: str) -> dict:
+    """Raises JWTError (incl. expiry) or ValueError for anything that isn't
+    a link token this server issued."""
+    claims = jwt.decode(token, _link_key(), algorithms=[settings.JWT_ALGORITHM])
+    if claims.get("typ") != "google_link" or not claims.get("google_sub"):
+        raise ValueError("Not a Google link token")
+    return claims
+
+
+
+# ── Sign-in record ───────────────────────────────────────────────────────────
+
+def issue_session(db: Session, user: User, method: str, request=None) -> str:
+    """Issue an access token and record the sign-in in the audit log, so the
+    user's activity log can show when and how their account was accessed
+    (and "Not you? Sign out everywhere" has something to point at)."""
+    from app.models.models import AuditLog
+
+    parts = [f"method={method}"]
+    if request is not None:
+        if request.client:
+            parts.append(f"ip={request.client.host}")
+        agent = (request.headers.get("user-agent") or "")[:160]
+        if agent:
+            parts.append(f"agent={agent}")
+    db.add(AuditLog(actor_id=user.id, action_type="sign_in", target_id=user.id, target_type="user", details="; ".join(parts)))
+    db.commit()
+    return create_access_token(user.id, user.phone_number, user.session_version or 0)

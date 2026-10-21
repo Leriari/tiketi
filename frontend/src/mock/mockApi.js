@@ -211,6 +211,16 @@ function mockTxHash() {
 function activatePayment(paymentId) {
   const payment = db.payments.find((p) => p.id === paymentId);
   if (!payment || payment.status !== "initiated") return;
+  if (payment.listing_id) {
+    payment.status = "success";
+    payment.confirmed_at = new Date().toISOString();
+    payment.mpesa_receipt_number = `M${Math.random().toString(36).slice(2, 10).toUpperCase()}`;
+    const listing = db.listings.find((l) => l.id === payment.listing_id);
+    const buyer = findUserById(payment.user_id);
+    if (listing && buyer) settleMockSale(listing, buyer);
+    save();
+    return;
+  }
 
   payment.status = "success";
   payment.confirmed_at = new Date().toISOString();
@@ -299,6 +309,68 @@ function resaleBounds(event, tier) {
   return { floor: tier.price, ceiling };
 }
 
+// Why a buyer can't buy this listing right now, or null (mirrors the real
+// backend's _buy_block_reason).
+function listingBlockReason(listing) {
+  const event = db.events.find((e) => e.id === listing.event_id);
+  if (!event || !["live", "sold_out"].includes(event.status)) return "This event isn't on sale right now";
+  if (new Date(event.event_date).getTime() <= Date.now()) return "This event has already started";
+  if (event.resale.resaleEnabled === false) return "The organiser has turned off resale for this event";
+  const closeMs = (event.resale.windowCloseHours || 0) * 3600 * 1000;
+  if (closeMs && Date.now() > new Date(event.event_date).getTime() - closeMs) {
+    return `Resale closed ${event.resale.windowCloseHours} hour(s) before the event`;
+  }
+  return null;
+}
+
+// Moves a sold listing's ticket to its buyer and records seller payout +
+// organiser royalty — shared by a real (mock) purchase and devSimulateSale.
+function settleMockSale(listing, buyer) {
+  const event = db.events.find((e) => e.id === listing.event_id);
+  listing.status = "sold";
+  listing.sold_at = new Date().toISOString();
+  listing.buyer_id = buyer.id;
+
+  const ticket = db.tickets.find((t) => t.id === listing.ticket_id);
+  if (ticket) {
+    ticket.owner_id = buyer.id;
+    ticket.status = "active";
+  }
+
+  const royaltyKes = Math.round(listing.price * (event.resale.royaltyPercent / 100));
+  const platformFeeKes = Math.round(listing.price * (PLATFORM_FEE_PERCENT / 100));
+  const payoutKes = listing.price - royaltyKes - platformFeeKes;
+  const availableAt = new Date(new Date(event.event_date).getTime() + 2 * 24 * 3600 * 1000).toISOString();
+
+  db.walletTransactions.push({
+    id: uuid(),
+    user_id: listing.seller_id,
+    type: "sale",
+    description: `Ticket sold — ${event.title}`,
+    amount: payoutKes,
+    status: "success",
+    created_at: new Date().toISOString(),
+    available_at: availableAt,
+  });
+
+  // The organiser's cut of every resale — Blockchain > Royalty Ledger.
+  if (royaltyKes > 0) {
+    db.organiserWalletTransactions.push({
+      id: uuid(),
+      event_id: event.id,
+      type: "royalty",
+      description: `Resale royalty — ${event.title}`,
+      listing_id: listing.id,
+      resale_price_kes: listing.price,
+      gross: royaltyKes,
+      net: royaltyKes,
+      tx_hash: mockTxHash(),
+      created_at: new Date().toISOString(),
+      available_at: availableAt,
+    });
+  }
+}
+
 function listingSummary(listing) {
   const ticket = db.tickets.find((t) => t.id === listing.ticket_id);
   const event = db.events.find((e) => e.id === listing.event_id);
@@ -322,6 +394,9 @@ function listingSummary(listing) {
     event_date: event.event_date,
     venue: event.venue,
     tier_name: tier?.name,
+    category: event.category,
+    image_data_url: event.image_data_url || null,
+    face_value_kes: tier?.price,
     resale_floor_kes: resaleBounds(event, tier).floor,
     resale_ceiling_kes: resaleBounds(event, tier).ceiling,
     checked_in: ticket?.status === "used",
@@ -474,6 +549,16 @@ function computePayoutQueueDepth() {
 // ─── Mock API ───────────────────────────────────────────────────────────────
 
 export const mockApi = {
+  // No Firebase in the mock (health reports no firebase config, so the login
+  // screen uses its plain phone step).
+  googlePhone: async () => {
+    throw new ApiError("Google sign-in needs the real backend.", 501);
+  },
+
+  firebaseLogin: async () => {
+    throw new ApiError("Firebase sign-in needs the real backend.", 501);
+  },
+
   health: async () => {
     await delay(120);
     return { status: "ok", service: "TiketiKE API (mock)", version: "mock", env: "development" };
@@ -490,6 +575,76 @@ export const mockApi = {
     const token = `mock.${user.id}`;
     setToken(token);
     return { access_token: token, user_id: user.id, phone_number: user.phone_number };
+  },
+
+  // ── My account (mock) — derived from the same local data the mock pages use.
+  getProfile: async () => {
+    const userId = requireUser();
+    await delay(200);
+    const user = findUserById(userId);
+    const now = Date.now();
+    const mine = db.tickets.filter((t) => t.owner_id === userId);
+    const held = mine.filter((t) => ["active", "resale"].includes(t.status));
+    const eventOf = (t) => db.events.find((e) => e.id === t.event_id);
+    const listings = db.listings.filter((l) => l.seller_id === userId);
+    const wallet = computeWallet(userId);
+    return {
+      user: { id: userId, phone_number: user.phone_number, display_name: user.display_name || null, email: null, google_linked: false, member_since: user.created_at || null },
+      security: { sign_in_methods: ["Phone"], last_sign_in: null },
+      attendee: {
+        tickets_held: held.length,
+        upcoming_events: new Set(held.filter((t) => new Date(eventOf(t)?.event_date).getTime() > now).map((t) => t.event_id)).size,
+        events_attended: new Set(mine.filter((t) => t.status === "used").map((t) => t.event_id)).size,
+      },
+      seller: {
+        active_listings: listings.filter((l) => ["active", "paused", "pending_review"].includes(l.status)).length,
+        tickets_sold: listings.filter((l) => l.status === "sold").length,
+        available_kes: wallet.available,
+        pending_kes: wallet.pending,
+      },
+      organisations: [],
+      platform_admin: false,
+    };
+  },
+
+  updateProfile: async ({ displayName }) => {
+    const userId = requireUser();
+    await delay(250);
+    const name = (displayName || "").trim().replace(/\s+/g, " ");
+    if (!name || name.length > 60) throw new ApiError("Your name must be 1-60 characters.", 422);
+    findUserById(userId).display_name = name;
+    save();
+    return mockApi.getProfile();
+  },
+
+  getActivity: async ({ before, category } = {}) => {
+    const userId = requireUser();
+    await delay(200);
+    const items = [];
+    for (const p of db.payments.filter((x) => x.user_id === userId)) {
+      const t = db.tickets.find((x) => x.id === p.ticket_id);
+      const ev = db.events.find((e) => e.id === t?.event_id);
+      if (p.status === "success") {
+        items.push({ id: `purchase:${p.id}`, kind: p.listing_id ? "resale_bought" : "purchase", category: p.listing_id ? "resale" : "purchase", at: p.confirmed_at || p.initiated_at,
+          title: `${p.listing_id ? "Bought a resale ticket" : "Bought 1 ticket"} for ${ev?.title || "an event"}`, detail: p.mpesa_receipt_number ? `M-Pesa ${p.mpesa_receipt_number}` : null, amount_kes: -p.amount_kes, link: "/tickets" });
+      }
+    }
+    for (const l of db.listings.filter((x) => x.seller_id === userId)) {
+      const ev = db.events.find((e) => e.id === l.event_id);
+      items.push({ id: `listed:${l.id}`, kind: "listed", category: "resale", at: l.listed_at, title: `Listed a ticket for ${ev?.title || "an event"}`, detail: `Asking KES ${l.price}`, amount_kes: null, link: "/seller/listings" });
+      if (l.status === "sold" && l.sold_at) items.push({ id: `sold:${l.id}`, kind: "sold", category: "resale", at: l.sold_at, title: `Sold your ticket for ${ev?.title || "an event"}`, detail: null, amount_kes: listingSummary(l).payout_kes, link: "/seller/wallet" });
+    }
+    let out = items.filter((i) => i.at).sort((a, b) => (a.at < b.at ? 1 : -1));
+    if (category) out = out.filter((i) => i.category === category);
+    if (before) out = out.filter((i) => i.at < before);
+    return { items: out.slice(0, 50), has_more: out.length > 50 };
+  },
+
+  signOutEverywhere: async () => {
+    requireUser();
+    await delay(200);
+    // The mock has no server-side sessions to end.
+    return { access_token: getToken(), token_type: "bearer" };
   },
 
   me: async () => {
@@ -1056,10 +1211,6 @@ export const mockApi = {
     await delay(300);
     const listing = db.listings.find((l) => l.id === listingId);
     if (!listing || listing.status !== "active") throw new ApiError("This listing isn't active.", 400);
-    const event = db.events.find((e) => e.id === listing.event_id);
-
-    listing.status = "sold";
-    listing.sold_at = new Date().toISOString();
 
     const buyerPhone = `2547${Math.floor(10000000 + Math.random() * 89999999)}`;
     let buyer = Object.values(db.users).find((u) => u.phone_number === buyerPhone);
@@ -1067,46 +1218,78 @@ export const mockApi = {
       buyer = { id: uuid(), phone_number: buyerPhone };
       db.users[buyerPhone] = buyer;
     }
-    const ticket = db.tickets.find((t) => t.id === listing.ticket_id);
-    if (ticket) {
-      ticket.owner_id = buyer.id;
-      ticket.status = "active";
-    }
-
-    const royaltyKes = Math.round(listing.price * (event.resale.royaltyPercent / 100));
-    const platformFeeKes = Math.round(listing.price * (PLATFORM_FEE_PERCENT / 100));
-    const payoutKes = listing.price - royaltyKes - platformFeeKes;
-    const availableAt = new Date(new Date(event.event_date).getTime() + 2 * 24 * 3600 * 1000).toISOString();
-
-    db.walletTransactions.push({
-      id: uuid(),
-      user_id: listing.seller_id,
-      type: "sale",
-      description: `Ticket sold — ${event.title}`,
-      amount: payoutKes,
-      status: "success",
-      created_at: new Date().toISOString(),
-      available_at: availableAt,
-    });
-
-    // The organiser's cut of every resale — Blockchain > Royalty Ledger.
-    if (royaltyKes > 0) {
-      db.organiserWalletTransactions.push({
-        id: uuid(),
-        event_id: event.id,
-        type: "royalty",
-        description: `Resale royalty — ${event.title}`,
-        listing_id: listing.id,
-        resale_price_kes: listing.price,
-        gross: royaltyKes,
-        net: royaltyKes,
-        tx_hash: mockTxHash(),
-        created_at: new Date().toISOString(),
-        available_at: availableAt,
-      });
-    }
+    settleMockSale(listing, buyer);
     save();
     return { success: true };
+  },
+
+  // ── Resale marketplace (buyer side) ───────────────────────────────────────
+
+  getResaleListings: async ({ eventId, sort = "price" } = {}) => {
+    await delay(250);
+    let rows = db.listings.filter((l) => l.status === "active" && !listingBlockReason(l));
+    if (eventId) rows = rows.filter((l) => l.event_id === eventId);
+    const out = rows.map(listingSummary);
+    if (sort === "newest") out.sort((a, b) => new Date(b.listed_at) - new Date(a.listed_at));
+    else if (sort === "date") out.sort((a, b) => new Date(a.event_date) - new Date(b.event_date) || a.price - b.price);
+    else out.sort((a, b) => a.price - b.price);
+    return out;
+  },
+
+  getResaleListing: async (listingId) => {
+    await delay(200);
+    const listing = db.listings.find((l) => l.id === listingId);
+    if (!listing) throw new ApiError("Listing not found", 404);
+    listing.views = (listing.views || 0) + 1;
+    save();
+    const reason = listing.status === "active" ? listingBlockReason(listing) : "This ticket is no longer available";
+    return { ...listingSummary(listing), buyable: !reason, unavailable_reason: reason };
+  },
+
+  buyResaleListing: async (listingId, { phoneNumber }) => {
+    const userId = requireUser();
+    await delay(350);
+    const listing = db.listings.find((l) => l.id === listingId);
+    if (!listing) throw new ApiError("Listing not found", 404);
+    if (listing.status !== "active") throw new ApiError("This listing is no longer available", 409);
+    if (listing.seller_id === userId) throw new ApiError("You cannot buy your own listing", 400);
+    const reason = listingBlockReason(listing);
+    if (reason) throw new ApiError(reason, 400);
+
+    listing.status = "pending_payment";
+    const payment = {
+      id: uuid(),
+      ticket_id: listing.ticket_id,
+      listing_id: listing.id,
+      user_id: userId,
+      amount_kes: listing.price,
+      status: "initiated",
+      checkout_request_id: `mock-checkout-${uuid().slice(0, 8)}`,
+      phone_number: phoneNumber,
+      initiated_at: new Date().toISOString(),
+      confirmed_at: null,
+      mpesa_receipt_number: null,
+    };
+    db.payments.push(payment);
+    save();
+    setTimeout(() => activatePayment(payment.id), PAYMENT_DELAY_MS);
+    return { payment_id: payment.id, checkout_request_id: payment.checkout_request_id, message: "STK push sent. Confirm payment on your phone." };
+  },
+
+  getResalePurchase: async (paymentId) => {
+    const userId = requireUser();
+    await delay(150);
+    const payment = db.payments.find((p) => p.id === paymentId && p.user_id === userId && p.listing_id);
+    if (!payment) throw new ApiError("Purchase not found", 404);
+    const listing = db.listings.find((l) => l.id === payment.listing_id);
+    const status = payment.status === "success" ? "complete" : payment.status === "initiated" ? "awaiting_payment" : "failed";
+    return {
+      payment_id: payment.id,
+      status,
+      failure_reason: status === "failed" ? "The payment could not be completed." : null,
+      ticket_id: status === "complete" ? payment.ticket_id : null,
+      listing: listing ? listingSummary(listing) : null,
+    };
   },
 
   getWallet: async () => {
@@ -1417,6 +1600,23 @@ export const mockApi = {
     return req;
   },
 
+  downloadExport: async () => {
+    throw new ApiError("Downloads need the real backend — the mock has no files to give you.", 501);
+  },
+
+  downloadReport: async () => {
+    throw new ApiError("Downloads need the real backend — the mock has no files to give you.", 501);
+  },
+
+  updateTeamMemberRole: async (memberId, role) => {
+    requireUser();
+    const member = db.teamMembers.find((m) => m.id === memberId);
+    if (!member) throw new ApiError("Member not found", 404);
+    member.role = role;
+    save();
+    return member;
+  },
+
   getReports: async () => {
     requireUser();
     await delay(250);
@@ -1587,13 +1787,15 @@ export const mockApi = {
     });
   },
 
-  inviteScanner: async ({ eventId, gateId, deviceName, operatorPhone }) => {
+  inviteScanner: async ({ eventId, gateId, gateName, deviceName, operatorPhone }) => {
     requireUser();
     await delay(400);
+    const event = db.events.find((e) => e.id === eventId);
+    const resolvedGateId = gateId || event?.gates.find((g) => g.name === gateName)?.id;
     const scanner = {
       id: uuid(),
       event_id: eventId,
-      gate_id: gateId,
+      gate_id: resolvedGateId,
       device_name: deviceName,
       operator_phone: operatorPhone,
       status: "invited",

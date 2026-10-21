@@ -4,6 +4,8 @@ import {
   Building2, Banknote, UsersRound,
 } from "lucide-react";
 import { ThemeProvider } from "../theme/ThemeProvider";
+import { usingMockBackend } from "../api";
+import { useAuth } from "../context/AuthContext";
 import SidebarShell from "./SidebarShell";
 
 const NAV_GROUPS = [
@@ -17,7 +19,7 @@ const NAV_GROUPS = [
       { to: "/organiser/marketing", label: "Marketing Analytics", icon: Megaphone },
       { to: "/organiser/tickets", label: "Ticket Central", icon: Ticket },
       { to: "/organiser/audit", label: "Ticket Audit Lookup", icon: Search },
-      { to: "/organiser/events/new", label: "Event Management", icon: CalendarPlus },
+      { to: "/organiser/events", label: "Events", icon: CalendarPlus },
       { to: "/organiser/crowd-control", label: "Crowd Control", icon: Users2 },
     ],
   },
@@ -56,10 +58,42 @@ const NAV_GROUPS = [
   },
 ];
 
+function OrganisationLabel() {
+  const { roles, activeOrganisation, switchOrganisation } = useAuth();
+  if (usingMockBackend || !activeOrganisation) return "Organiser Console";
+  const role = activeOrganisation.role === "owner" ? "Owner" : "Staff";
+  if (roles.organisations.length < 2) {
+    return `Organiser Console · ${activeOrganisation.businessName} (${role})`;
+  }
+  return (
+    <span className="inline-flex items-center gap-2">
+      Organiser Console ·
+      <select
+        aria-label="Organisation"
+        value={activeOrganisation.id}
+        onChange={(e) => switchOrganisation(e.target.value)}
+        className="bg-transparent text-ink-primary font-semibold rounded-sm border border-line px-1.5 py-0.5"
+      >
+        {roles.organisations.map((o) => (
+          <option key={o.id} value={o.id}>{o.businessName} ({o.role === "owner" ? "Owner" : "Staff"})</option>
+        ))}
+      </select>
+    </span>
+  );
+}
+
 export default function OrganiserShell() {
+  const { activeOrganisation } = useAuth();
+  // Keyed by organisation so switching remounts every page and refetches.
   return (
     <ThemeProvider surfaceDefault="light">
-      <SidebarShell navGroups={NAV_GROUPS} roleLabel="Organiser Console" profilePath="/organiser/profile" />
+      <SidebarShell
+        key={activeOrganisation?.id || "none"}
+        navGroups={NAV_GROUPS}
+        roleLabel={<OrganisationLabel />}
+        profilePath="/organiser/profile"
+        surface="organiser"
+      />
     </ThemeProvider>
   );
 }

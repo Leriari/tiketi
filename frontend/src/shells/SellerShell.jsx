@@ -43,7 +43,7 @@ function FooterCard() {
 export default function SellerShell() {
   return (
     <ThemeProvider surfaceDefault="dark">
-      <SidebarShell navGroups={NAV_GROUPS} footerCard={<FooterCard />} roleLabel="P2P Marketplace" profilePath="/seller/profile" />
+      <SidebarShell navGroups={NAV_GROUPS} footerCard={<FooterCard />} roleLabel="P2P Marketplace" profilePath="/seller/profile" surface="seller" />
     </ThemeProvider>
   );
 }

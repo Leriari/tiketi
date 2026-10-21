@@ -53,7 +53,10 @@ def get_ticket_detail(
     event = ticket.event
     return {
         "ticket_id": ticket.id,
+        "event_id": ticket.event_id,
         "event_title": event.title if event else None,
+        "category": event.category if event else None,
+        "image_url": event.image_url if event else None,
         "venue": event.venue if event else None,
         "event_date": event.event_date if event else None,
         "tier_name": ticket.tier.tier_name if ticket.tier else None,

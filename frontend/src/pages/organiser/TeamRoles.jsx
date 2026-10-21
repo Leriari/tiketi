@@ -2,18 +2,20 @@ import { useState } from "react";
 import { Plus } from "lucide-react";
 import { api, ApiError } from "../../api";
 import { useApiData } from "../../lib/useApiData";
+import { formatPhone } from "../../format";
 import { useToast } from "../../components/ui/Toast";
 import { Table, Badge, Button, Modal, Select, Input, EmptyState, ErrorState } from "../../components/ui";
 
+// The backend's two organisation roles (app/core/authz.py).
 const ROLES = [
-  { value: "manager", label: "Manager — full access" },
-  { value: "finance", label: "Finance — wallet & payouts only" },
-  { value: "gate_staff", label: "Gate staff — scanner & crowd control only" },
+  { value: "staff", label: "Staff — sees everything, scans and admits; can't create events or change settings" },
+  { value: "owner", label: "Owner — full access, including events, money and settings" },
 ];
 
 const STATUS_TONE = { invited: "warning", active: "success" };
 
 function InviteModal({ onClose, onInvited }) {
+  const toast = useToast();
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [role, setRole] = useState(ROLES[0].value);
@@ -25,6 +27,8 @@ function InviteModal({ onClose, onInvited }) {
     try {
       await api.inviteTeamMember({ name, phone, role });
       onInvited();
+    } catch (err) {
+      toast.push(err instanceof ApiError ? err.message : "Couldn't add that person.", { tone: "danger" });
     } finally {
       setBusy(false);
     }
@@ -71,7 +75,7 @@ export default function TeamRoles() {
         empty={<EmptyState title="It's just you so far" description="Invite teammates to help manage events, finances, or gates." actionLabel="Invite member" onAction={() => setInviteOpen(true)} />}
         columns={[
           { key: "name", header: "Name" },
-          { key: "phone", header: "Phone" },
+          { key: "phone", header: "Phone", render: (m) => <span className="tabular-nums">{formatPhone(m.phone)}</span> },
           { key: "role", header: "Role", render: (m) => ROLES.find((r) => r.value === m.role)?.label.split(" — ")[0] || m.role },
           { key: "status", header: "Status", render: (m) => <Badge tone={STATUS_TONE[m.status]}>{m.status}</Badge> },
           { key: "invited_at", header: "Invited", render: (m) => <span className="tabular-nums">{new Date(m.invited_at).toLocaleDateString("en-KE", { day: "2-digit", month: "short" })}</span> },
@@ -79,7 +83,7 @@ export default function TeamRoles() {
         rowActions={(m) => [{ label: "Remove", danger: true, onClick: async () => { if (window.confirm(`Remove ${m.name} from your team?`)) { try { await remove(m.id); } catch (err) { toast.push(err instanceof ApiError ? err.message : "Couldn't remove.", { tone: "danger" }); } } } }]}
       />}
 
-      {inviteOpen && <InviteModal onClose={() => setInviteOpen(false)} onInvited={() => { setInviteOpen(false); toast.push("Invite sent.", { tone: "success" }); retry(); }} />}
+      {inviteOpen && <InviteModal onClose={() => setInviteOpen(false)} onInvited={() => { setInviteOpen(false); toast.push("Team member added. They can log in with their phone number.", { tone: "success" }); retry(); }} />}
     </div>
   );
 }

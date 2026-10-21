@@ -1,6 +1,68 @@
-@import url("https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap");
+@import url("https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500;600&display=swap");
 @import "./styles/tokens.css";
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+/* ── System-wide typographic rules (docs/design-principles.md) ─────────── */
+
+@layer utilities {
+  /* P4 — every number the app marks as tabular (money, counts, codes,
+     times) is set in the mono face, so columns line up and digits never
+     shift. One rule here instead of touching ~80 call sites. */
+  .tabular-nums {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: -0.01em;
+  }
+
+  /* P2/P4 — section labels read as instrument markings. */
+  .text-label {
+    font-family: var(--font-mono);
+  }
+
+  .font-mono {
+    font-family: var(--font-mono);
+  }
+
+  /* P5 — the instrument base layer: a faint grid and two soft colour
+     fields. Applied to each surface's root; under 3% visible. */
+  .app-backdrop {
+    background-color: var(--bg-base);
+    background-image:
+      radial-gradient(1100px 520px at 8% -12%, var(--backdrop-field-a), transparent 62%),
+      radial-gradient(900px 480px at 104% -6%, var(--backdrop-field-b), transparent 60%),
+      linear-gradient(var(--backdrop-grid) 1px, transparent 1px),
+      linear-gradient(90deg, var(--backdrop-grid) 1px, transparent 1px);
+    background-size: auto, auto, 32px 32px, 32px 32px;
+    background-attachment: fixed;
+  }
+
+  /* P5 — translucent chrome (sticky headers): solid fallback first, blur
+     only where the device supports it (P7: never essential). */
+  .glass {
+    background-color: var(--bg-surface);
+  }
+  @supports (backdrop-filter: blur(1px)) {
+    .glass {
+      background-color: color-mix(in srgb, var(--bg-surface) 78%, transparent);
+      backdrop-filter: saturate(140%) blur(14px);
+    }
+  }
+
+  /* P3 — a live indicator: the only looping animation in the product. */
+  .live-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 9999px;
+    background: var(--chain-verified);
+    box-shadow: var(--glow-live);
+    animation: live-pulse 1.8s ease-in-out infinite;
+  }
+}
+
+@keyframes live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}

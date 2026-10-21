@@ -90,7 +90,7 @@ export default function CrowdControl() {
               <span className="tabular-nums text-ink-primary font-semibold">{data.admitted} / {data.capacity}</span>
             </div>
             <ProgressBar value={data.admitted} max={data.capacity} showPercent ariaLabel="Admitted" />
-            <p className="text-caption text-ink-tertiary">{data.admissionRate}% admission rate · queue estimate ~{data.queueEstimate} people</p>
+            <p className="text-caption text-ink-tertiary">{data.admissionRate}% admission rate · {data.queueEstimate} ticket holders not yet admitted</p>
           </Card>
 
           <div className="flex flex-col gap-2">

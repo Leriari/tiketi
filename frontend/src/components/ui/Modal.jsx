@@ -13,7 +13,7 @@ export default function Modal({ open, onClose, title, children, footer, dismissi
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
       <div
-        className="absolute inset-0 bg-black/60 animate-[fadeIn_150ms_ease-out]"
+        className="absolute inset-0 bg-black/70 backdrop-blur-[2px] animate-[fadeIn_150ms_ease-out]"
         onClick={dismissible ? onClose : undefined}
         aria-hidden="true"
       />
@@ -23,7 +23,7 @@ export default function Modal({ open, onClose, title, children, footer, dismissi
         aria-modal="true"
         aria-label={title}
         className={cn(
-          "relative w-full rounded-lg bg-surface border border-line-subtle shadow-modal p-6 flex flex-col gap-4",
+          "relative w-full rounded-lg bg-surface-elevated border border-line shadow-modal p-6 flex flex-col gap-4",
           "animate-[modalIn_220ms_cubic-bezier(0.32,0.72,0,1)]",
           widths[size]
         )}

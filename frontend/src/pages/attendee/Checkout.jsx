@@ -45,7 +45,8 @@ export default function Checkout() {
   const tickRef = useRef(null);
 
   useEffect(() => {
-    api.health().then((h) => setIsDev(h.env === "development")).catch(() => {});
+    // The "Simulate M-Pesa success" button: the server says whether it's on.
+    api.health().then((h) => setIsDev(h.simulated_payments ?? h.env === "development")).catch(() => {});
   }, []);
 
   useEffect(() => () => {

@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { api } from "../../api";
 import { useApiData } from "../../lib/useApiData";
-import { Card, StatCard, MoneyText, Skeleton, Table, ErrorState } from "../../components/ui";
+import { Card, StatCard, MoneyText, Skeleton, Table, ErrorState, EmptyState } from "../../components/ui";
 
 const COLORS = ["#7C5CFF", "#00D4AA", "#3E8BFF", "#E8A317", "#E5484D"];
 
@@ -34,6 +34,13 @@ export default function MarketingAnalytics() {
         <ErrorState description={error} onRetry={retry} />
       ) : !data ? (
         <div className="flex flex-col gap-3">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-24 w-full" />)}</div>
+      ) : data.trackingEnabled === false ? (
+        <Card padding="p-0">
+          <EmptyState
+            title="Traffic isn't tracked yet"
+            description="ChainTix doesn't record where buyers come from (Instagram, WhatsApp, links), so there's no real traffic or campaign data to show. Sales figures are in Earnings and Revenue Breakdown."
+          />
+        </Card>
       ) : (
         <>
           <div className="grid grid-cols-3 gap-3">

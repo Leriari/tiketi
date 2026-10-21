@@ -14,7 +14,11 @@ import Checkout from "./pages/attendee/Checkout";
 import Confirmation from "./pages/attendee/Confirmation";
 import MyTickets from "./pages/attendee/MyTickets";
 import TicketCredential from "./pages/attendee/TicketCredential";
-import Account from "./pages/attendee/Account";
+import Profile from "./pages/Profile";
+import NotFound from "./pages/NotFound";
+import EventsList from "./pages/organiser/EventsList";
+import ResaleMarketplace from "./pages/attendee/ResaleMarketplace";
+import ResaleCheckout from "./pages/attendee/ResaleCheckout";
 import SellerShell from "./shells/SellerShell";
 import SellerDashboard from "./pages/seller/Dashboard";
 import SellWizard from "./pages/seller/SellWizard";
@@ -102,13 +106,18 @@ export default function App() {
               <Route path="/" element={<Landing />} />
               <Route path="/events" element={<Browse />} />
               <Route path="/events/:eventId" element={<EventDetail />} />
+              <Route path="/resale" element={<ResaleMarketplace />} />
               <Route element={<RequireAuth />}>
+                <Route path="/resale/:listingId" element={<ResaleCheckout />} />
                 <Route path="/checkout/:eventId" element={<Checkout />} />
                 <Route path="/confirmation/:ticketId" element={<Confirmation />} />
                 <Route path="/tickets" element={<MyTickets />} />
                 <Route path="/tickets/:ticketId" element={<TicketCredential />} />
-                <Route path="/account" element={<Account />} />
+                <Route path="/profile" element={<Profile />} />
+                {/* The old Account page grew into the cross-role profile. */}
+                <Route path="/account" element={<Navigate to="/profile" replace />} />
               </Route>
+              <Route path="*" element={<NotFound />} />
             </Route>
 
             <Route element={<RequireAuth />}>
@@ -134,6 +143,7 @@ export default function App() {
                 <Route path="marketing" element={<MarketingAnalytics />} />
                 <Route path="tickets" element={<TicketCentral />} />
                 <Route path="audit" element={<AuditLookup />} />
+                <Route path="events" element={<EventsList />} />
                 <Route path="events/new" element={<EventManagement />} />
                 <Route path="events/:eventId/edit" element={<EventManagement />} />
                 <Route path="crowd-control" element={<CrowdControl />} />
@@ -177,7 +187,6 @@ export default function App() {
               </Route>
             </Route>
 
-            <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </AuthProvider>
       </ToastProvider>

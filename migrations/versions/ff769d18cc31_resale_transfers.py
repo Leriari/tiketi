@@ -24,8 +24,19 @@ branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
 
+def _recreate() -> str:
+    # SQLite can only change constraints by copying the table; Postgres alters
+    # in place (copying there collides with other tables' foreign keys).
+    return "always" if op.get_bind().dialect.name == "sqlite" else "auto"
+
+
 def upgrade() -> None:
-    with op.batch_alter_table('transfers', recreate='always') as batch_op:
+    # Postgres: an added column's enum type must exist first (no-op on SQLite).
+    sa.Enum(
+        'LISTED', 'PAUSED', 'PENDING_PAYMENT', 'PAID', 'COMPLETED',
+        'CANCELLED', 'EXPIRED', 'SETTLEMENT_FAILED', name='transferstatus',
+    ).create(op.get_bind(), checkfirst=True)
+    with op.batch_alter_table('transfers', recreate=_recreate()) as batch_op:
         batch_op.add_column(sa.Column(
             'status',
             sa.Enum(
@@ -51,15 +62,15 @@ def upgrade() -> None:
         # NOT NULL / always-set-at-creation column the original schema had.
         batch_op.alter_column('transferred_at', existing_type=sa.DateTime(), nullable=True)
 
-    with op.batch_alter_table('payments', recreate='always') as batch_op:
+    with op.batch_alter_table('payments', recreate=_recreate()) as batch_op:
         batch_op.drop_constraint('uq_payments_ticket_id', type_='unique')
 
 
 def downgrade() -> None:
-    with op.batch_alter_table('payments', recreate='always') as batch_op:
+    with op.batch_alter_table('payments', recreate=_recreate()) as batch_op:
         batch_op.create_unique_constraint('uq_payments_ticket_id', ['ticket_id'])
 
-    with op.batch_alter_table('transfers', recreate='always') as batch_op:
+    with op.batch_alter_table('transfers', recreate=_recreate()) as batch_op:
         batch_op.alter_column('transferred_at', existing_type=sa.DateTime(), nullable=False)
         batch_op.drop_constraint('fk_transfers_event_id', type_='foreignkey')
         batch_op.drop_column('pause_reason')
