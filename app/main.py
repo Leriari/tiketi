@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 import redis
 
 from app.core.config import get_settings
+from app.core.json_response import UTCJSONResponse
 from app.api.routes import auth, events, payments, tickets, gate, resale, dev, organisations, organiser_console, me
 
 settings = get_settings()
@@ -21,6 +22,7 @@ app = FastAPI(
     description="Web 2.5 Event Ticketing Platform for Kenya — M-Pesa + NFT + Dynamic QR",
     version="1.0.0",
     lifespan=lifespan,
+    default_response_class=UTCJSONResponse,
     docs_url="/docs",
     redoc_url="/redoc",
 )

@@ -7,6 +7,7 @@ import {
   Input, Select, Textarea, DatePicker, FileDropzone, Toggle, RichTextEditor, Chip, Button, Card, MoneyText,
 } from "../../components/ui";
 import { CATEGORIES } from "../../constants";
+import { localInputToUtc, utcToLocalInput } from "../../format";
 import { categoryGradient } from "../../lib/categoryGradient";
 import { eventImageUrl } from "../../lib/eventImage";
 
@@ -59,8 +60,8 @@ export default function EventManagement() {
       setArtists(ev.artists || []);
       setImageDataUrl(eventImageUrl(ev));
       setImageChanged(false);
-      setStartsAt(ev.event_date?.slice(0, 16) || "");
-      setEndsAt(ev.ends_at?.slice(0, 16) || "");
+      setStartsAt(utcToLocalInput(ev.event_date));
+      setEndsAt(utcToLocalInput(ev.ends_at));
       setDescription(ev.description_html || ev.description || "");
       setStatus(ev.status);
       setCapacity(String(ev.total_capacity));
@@ -69,7 +70,10 @@ export default function EventManagement() {
       setRoyaltyPct(ev.resale_royalty_percent);
       setWindowOpenDays(ev.resale_window_open_days);
       setWindowCloseHours(ev.resale_window_close_hours);
-      setTiers(ev.tiers.map((t) => ({ key: crypto.randomUUID(), ...t, price: String(t.price), capacity: String(t.capacity) })));
+      setTiers(ev.tiers.map((t) => ({
+        key: crypto.randomUUID(), ...t, price: String(t.price), capacity: String(t.capacity),
+        salesStart: utcToLocalInput(t.salesStart, false), salesEnd: utcToLocalInput(t.salesEnd, false),
+      })));
       setGates(ev.gates.map((g) => ({ key: crypto.randomUUID(), ...g })));
       setLoaded(true);
     }).catch((err) => {
@@ -138,8 +142,9 @@ export default function EventManagement() {
       venue,
       artists,
       ...(imageChanged ? { image_data_url: imageDataUrl } : {}),
-      event_date: startsAt,
-      ends_at: endsAt || null,
+      // The inputs hold the organiser's own clock; the API stores UTC.
+      event_date: localInputToUtc(startsAt),
+      ends_at: localInputToUtc(endsAt),
       description,
       description_html: description,
       status: nextStatus,
@@ -149,7 +154,10 @@ export default function EventManagement() {
       resale_enabled: resaleEnabled,
       resale_window_open_days: windowOpenDays,
       resale_window_close_hours: windowCloseHours,
-      tiers: tiers.map((t) => ({ ...t, price: Number(t.price), capacity: Number(t.capacity) })),
+      tiers: tiers.map((t) => ({
+        ...t, price: Number(t.price), capacity: Number(t.capacity),
+        salesStart: localInputToUtc(t.salesStart), salesEnd: localInputToUtc(t.salesEnd),
+      })),
       gates: gates.map((g) => ({ id: g.id, name: g.name })),
     };
   }
