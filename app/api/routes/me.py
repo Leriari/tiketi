@@ -282,6 +282,9 @@ def get_activity(
     if category:
         items = [i for i in items if i["category"] == category]
     if before:
+        # The cursor comes back as the client saw it, with the "Z" that
+        # UTCJSONResponse adds; the items here don't have it yet.
+        before = before.removesuffix("Z")
         items = [i for i in items if i["at"] < before]
     page = items[:limit]
     return {"items": page, "has_more": len(items) > limit}

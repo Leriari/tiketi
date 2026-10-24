@@ -18,6 +18,26 @@ export function formatShortDate(iso) {
   return d.toLocaleString("en-KE", { weekday: "short", day: "numeric", month: "short" });
 }
 
+/**
+ * A date/datetime-local input's value ("2026-11-07" or "2026-11-07T10:00",
+ * on the organiser's own clock) -> a UTC ISO string for the API, which
+ * stores every time in UTC. "" -> null.
+ */
+export function localInputToUtc(value) {
+  if (!value) return null;
+  const d = new Date(value.length === 10 ? `${value}T00:00` : value);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+/** The reverse: an API time -> a date (withTime=false) or datetime-local input value on the viewer's clock. */
+export function utcToLocalInput(iso, withTime = true) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const local = new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString();
+  return withTime ? local.slice(0, 16) : local.slice(0, 10);
+}
+
 /** Loose Kenyan mobile validation — 07XXXXXXXX / 01XXXXXXXX / 2547.../2541... / +254... */
 export function isValidKenyanPhone(input) {
   const digits = String(input).replace(/\D/g, "");
