@@ -22,7 +22,8 @@ services:
     environment:
       API_DOMAIN: ${API_DOMAIN}
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      # ",z" lets containers read bind mounts under SELinux (Oracle Linux); ignored elsewhere.
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro,z
       - caddy_data:/data
       - caddy_config:/config
     depends_on:
@@ -82,7 +83,7 @@ services:
     environment:
       PGPASSWORD: ${POSTGRES_PASSWORD}
     volumes:
-      - ./backups:/backups
+      - ./backups:/backups:z
     # First dump 10 minutes after start (the API creates/migrates the tables
     # on start — dumping straight away captured an empty database), then daily.
     entrypoint: ["sh", "-c", "sleep 600; while true; do pg_dump -h db -U tiketi tiketi | gzip > /backups/tiketi-$$(date +%F).sql.gz && find /backups -name 'tiketi-*.sql.gz' -mtime +14 -delete; sleep 86400; done"]

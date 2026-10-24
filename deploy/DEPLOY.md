@@ -23,7 +23,8 @@ It takes about an hour the first time. Most of that is Oracle signup.
    - Oracle asks for a card to verify you. Always Free resources are never
      charged; stay on the Free Tier and don't upgrade.
 2. Go to **Compute → Instances → Create instance**:
-   - **Image:** Canonical **Ubuntu 22.04** or 24.04.
+   - **Image:** Oracle's default **Oracle Linux 9** works, as does Canonical
+     **Ubuntu 22.04** or 24.04.
    - **Shape:** *Ampere* → **VM.Standard.A1.Flex**, with 2 OCPUs and 12 GB
      memory. Up to 4 OCPUs and 24 GB is free. If you get "Out of capacity",
      try again later or use another availability domain.
@@ -62,8 +63,11 @@ This writes `deploy/.env.production`, which is git-ignored:
 Connect to the server. On Windows, PowerShell has `ssh` built in:
 
 ```bash
-ssh -i path\to\ssh-key.key ubuntu@<PUBLIC_IP>
+ssh -i path\to\ssh-key.key opc@<PUBLIC_IP>
 ```
+
+The user name is `opc` on Oracle Linux and `ubuntu` on Ubuntu; use the same
+one in the `scp` command below.
 
 The repository is private, so give the server its own **read-only deploy
 key**. It can read this one repository and nothing else, and you can revoke
@@ -90,7 +94,7 @@ exit        # log out and back in so Docker works without sudo
 From your PC, copy the settings file up:
 
 ```bash
-scp -i path\to\ssh-key.key deploy\.env.production ubuntu@<PUBLIC_IP>:~/tiketi/deploy/
+scp -i path\to\ssh-key.key deploy\.env.production opc@<PUBLIC_IP>:~/tiketi/deploy/
 ```
 
 Back on the server, start everything:
