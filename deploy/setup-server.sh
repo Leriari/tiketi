@@ -21,7 +21,9 @@ for port in 80 443; do
     sudo iptables -I INPUT 6 -m state --state NEW -p tcp --dport "$port" -j ACCEPT
   fi
 done
-sudo apt-get install -y -qq iptables-persistent >/dev/null 2>&1 || true
+# noninteractive: the package otherwise opens a "save current rules?" dialog,
+# which would hang invisibly behind the >/dev/null.
+sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq iptables-persistent >/dev/null 2>&1 || true
 sudo netfilter-persistent save >/dev/null 2>&1 || true
 
 echo "==> Swap (only if the machine has under 4 GB of memory)"

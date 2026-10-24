@@ -32,7 +32,8 @@ It takes about an hour the first time. Most of that is Oracle signup.
 3. When the instance is *Running*, copy its **Public IP address**.
 4. Open the web ports. Go to the instance's **Subnet**, then **Security
    List**, then **Add Ingress Rules**. Add source `0.0.0.0/0`, TCP,
-   destination port **80**. Add the same rule again for **443**.
+   **Destination** Port Range **80**. Leave **Source** Port Range empty.
+   Add the same rule again for **443**.
 
 ## 2. Make the production settings (on your PC)
 
