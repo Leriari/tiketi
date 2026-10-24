@@ -64,15 +64,27 @@ Connect to the server. On Windows, PowerShell has `ssh` built in:
 ssh -i path\to\ssh-key.key ubuntu@<PUBLIC_IP>
 ```
 
-On the server:
+The repository is private, so give the server its own **read-only deploy
+key**. It can read this one repository and nothing else, and you can revoke
+it anytime. On the server:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/Leriari/tiketi/main/deploy/setup-server.sh | bash
-exit        # log out and back in so Docker works without sudo
+ssh-keygen -t ed25519 -N "" -f ~/.ssh/id_ed25519 -C "tiketi-server"
+cat ~/.ssh/id_ed25519.pub
 ```
 
-If the GitHub repository is **private**, run `git clone` yourself with a
-[personal access token](https://github.com/settings/tokens) instead.
+Copy the line it prints. On GitHub, go to the **Leriari/tiketi** repository,
+then **Settings → Deploy keys → Add deploy key**. Paste the line, name it
+"oracle-server", and leave "Allow write access" **off**.
+
+Then, on the server:
+
+```bash
+ssh-keyscan github.com >> ~/.ssh/known_hosts
+git clone git@github.com:Leriari/tiketi.git ~/tiketi
+bash ~/tiketi/deploy/setup-server.sh
+exit        # log out and back in so Docker works without sudo
+```
 
 From your PC, copy the settings file up:
 

@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# One-time preparation of a fresh Oracle Cloud Ubuntu server.
+# One-time preparation of a fresh Oracle Cloud Ubuntu server. Run it after
+# cloning the (private) repository with a deploy key — see DEPLOY.md step 3:
 #
-#   curl -fsSL https://raw.githubusercontent.com/Leriari/tiketi/main/deploy/setup-server.sh | bash
-#   (or, after cloning:  bash ~/tiketi/deploy/setup-server.sh)
+#   bash ~/tiketi/deploy/setup-server.sh
 #
 # Installs Docker, opens ports 80/443 in the server's own firewall (Oracle's
 # Ubuntu images block them even when the cloud security list allows them),
-# adds swap on small machines, and clones the project.
+# and adds swap on small machines.
 set -euo pipefail
 
 echo "==> Installing Docker"
@@ -32,9 +32,9 @@ if [ "$mem_kb" -lt 4000000 ] && ! swapon --show | grep -q swapfile; then
   echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
 fi
 
-echo "==> Getting the code"
-if [ ! -d "$HOME/tiketi" ]; then
-  git clone https://github.com/Leriari/tiketi.git "$HOME/tiketi"
+if [ ! -d "$HOME/tiketi/.git" ]; then
+  echo "Clone the repository to ~/tiketi first (DEPLOY.md step 3)." >&2
+  exit 1
 fi
 chmod +x "$HOME/tiketi/deploy/up.sh"
 
