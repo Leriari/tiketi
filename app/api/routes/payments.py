@@ -22,6 +22,8 @@ from app.core.crypto import encrypt_secret
 from app.core.dependencies import get_current_user
 from app.core.config import get_settings
 from app.core.rate_limit import enforce_rate_limit
+from app.services import organiser_service
+from app.services.platform_settings import flag_on
 from app.worker import mint_ticket_nft, settle_resale_transfer
 
 router = APIRouter(prefix="/payments", tags=["Payments"])
@@ -115,7 +117,11 @@ async def purchase_ticket(
     enforce_rate_limit(f"purchase:user:{current_user.id}", *_PURCHASE_LIMIT)
 
     # ── 1. Validate event ────────────────────────────────────────────────────
-    event = db.query(Event).filter(Event.id == body.event_id, Event.status == EventStatus.PUBLISHED).first()
+    event = (
+        db.query(Event)
+        .filter(Event.id == body.event_id, Event.status == EventStatus.PUBLISHED, organiser_service.not_suspended())
+        .first()
+    )
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
 
@@ -346,6 +352,8 @@ def dev_confirm_payment(
     """
     if not settings.simulated_payments:
         raise HTTPException(status_code=404, detail="Not found")
+    if not flag_on(db, "simulated_payments"):
+        raise HTTPException(status_code=403, detail="Simulated payments are switched off. Complete the M-Pesa prompt instead.")
 
     payment = (
         db.query(Payment)

@@ -5,6 +5,7 @@ import { ThemeToggle, Avatar, DropdownMenu, Drawer } from "../components/ui";
 import { useAuth, useSurfaceAccess } from "../context/AuthContext";
 import { cn } from "../lib/cn";
 import BrandMark from "../components/BrandMark";
+import AnnouncementBanner from "../components/AnnouncementBanner";
 
 /**
  * Spec §2.1: fixed 264px sidebar, collapses to a 64px icon rail below 1280px
@@ -152,6 +153,8 @@ export default function SidebarShell({ navGroups, footerCard, roleLabel, profile
             />
           </div>
         </header>
+
+        <AnnouncementBanner />
 
         <main className="flex-1 min-w-0">
           <Outlet />

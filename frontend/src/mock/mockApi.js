@@ -2111,6 +2111,26 @@ export const mockApi = {
     return computeFraudSignals();
   },
 
+  getBroadcastChannels: async () => ({
+    in_app: { available: true, reason: null },
+    sms: { available: true, reason: null },
+    push: { available: true, reason: null },
+  }),
+
+  getAnnouncements: async () => {
+    const now = Date.now();
+    return db.platformBroadcasts
+      .filter((b) => b.channels.includes("in_app") && (!b.scheduled_for || new Date(b.scheduled_for).getTime() <= now))
+      .slice(0, 3)
+      .map((b) => ({ id: b.id, message: b.message, at: b.sent_at || b.scheduled_for }));
+  },
+
+  exportAuditLog: async () => {
+    requireUser();
+    await delay(300);
+    return { success: true };
+  },
+
   getBroadcasts: async () => {
     requireUser();
     await delay(250);

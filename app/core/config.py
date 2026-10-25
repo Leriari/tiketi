@@ -88,6 +88,13 @@ class Settings(BaseSettings):
     # "https://tiketi-6e9fd.web.app". Empty: "*" when DEBUG, otherwise none.
     CORS_ORIGINS: str = ""
 
+    # Unit costs for Admin → Platform Costs. Defaults are what the free
+    # deployment really pays: free hosting, a testnet, the Daraja sandbox.
+    COST_INFRA_MONTHLY_USD: float = 0.0
+    COST_GAS_PER_TX_USD: float = 0.0
+    COST_SMS_PER_MESSAGE_KES: float = 0.8
+    COST_DARAJA_PER_TXN_KES: float = 0.0
+
     @property
     def demo_phone_codes(self) -> dict[str, str]:
         from app.schemas.schemas import normalize_kenyan_phone

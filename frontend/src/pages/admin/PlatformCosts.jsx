@@ -1,4 +1,4 @@
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, Info } from "lucide-react";
 import { api } from "../../api";
 import { useApiData } from "../../lib/useApiData";
 import { StatCard, MoneyText, Table, EmptyState, ErrorState, Skeleton } from "../../components/ui";
@@ -29,10 +29,24 @@ export default function PlatformCosts() {
         <>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
             <StatCard label="Infrastructure" value={`$${data.infraMonthlyUsd}`} hint="Fixed monthly, hosting + services" />
-            <StatCard label="Gas Spend" value={`$${data.gasSpendUsd}`} hint="On-chain minting, all-time" />
+            <StatCard
+              label="Gas Spend"
+              value={`$${data.gasSpendUsd}`}
+              hint={data.onchainTxCount != null ? `${data.onchainTxCount} on-chain transactions, all-time` : "On-chain minting, all-time"}
+            />
             <StatCard label="SMS Spend" value={<MoneyText value={data.smsSpendKes} />} hint="Transactional SMS, all-time" />
             <StatCard label="Daraja Charges" value={<MoneyText value={data.darajaChargesKes} />} hint="M-Pesa transaction fees, all-time" />
           </div>
+          {data.notes?.length > 0 && (
+            <ul className="flex flex-col gap-1.5 rounded-md bg-surface-inset px-4 py-3">
+              {data.notes.map((n) => (
+                <li key={n} className="flex items-start gap-2 text-body-sm text-ink-secondary">
+                  <Info size={15} className="flex-none mt-0.5 text-info" aria-hidden="true" />
+                  {n}
+                </li>
+              ))}
+            </ul>
+          )}
 
           <div className="flex flex-col gap-2">
             <span className="text-label uppercase tracking-[0.06em] text-ink-tertiary font-medium">Per-event unit economics</span>

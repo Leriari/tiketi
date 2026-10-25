@@ -20,7 +20,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.db.session import get_db
 from app.models.models import (
@@ -34,7 +34,8 @@ from app.schemas.schemas import (
 from app.services import mpesa as mpesa_service
 from app.services import web3_service
 from app.core.dependencies import get_current_user
-from app.core.constants import PLATFORM_FEE_PERCENT, MIN_WITHDRAWAL_KES
+from app.services import organiser_service
+from app.services.platform_settings import current_fees, flag_on
 
 router = APIRouter(prefix="/resale", tags=["Resale"])
 logger = logging.getLogger(__name__)
@@ -92,6 +93,8 @@ def _buy_block_reason(transfer: Transfer) -> str | None:
     event = transfer.event
     if not event or event.status not in _PUBLIC_EVENT_STATUSES:
         return "This event isn't on sale right now"
+    if organiser_service.organisation_suspended(object_session(transfer), event):
+        return "This event isn't on sale right now"
     now = datetime.utcnow()
     if event.event_date <= now:
         return "This event has already started"
@@ -138,14 +141,14 @@ def _log_rejected_listing(db: Session, user_id: str, ticket: Ticket, price_kes: 
 
 # ── Serialization helpers ───────────────────────────────────────────────────
 
-def _fee_split(price_kes: float, royalty_percent: float) -> tuple[float, float, float]:
+def _fee_split(price_kes: float, royalty_percent: float, platform_fee_percent: float) -> tuple[float, float, float]:
     """
     royalty_kes, platform_fee_kes, payout_kes. payout_kes is defined as the
     remainder (price minus the other two, each independently rounded) so the
     three always sum to price_kes exactly — no wei/cent lost to rounding.
     """
     royalty_kes = round(price_kes * royalty_percent / 100)
-    platform_fee_kes = round(price_kes * PLATFORM_FEE_PERCENT / 100)
+    platform_fee_kes = round(price_kes * platform_fee_percent / 100)
     payout_kes = price_kes - royalty_kes - platform_fee_kes
     return royalty_kes, platform_fee_kes, payout_kes
 
@@ -167,7 +170,8 @@ def _serialize_listing(transfer: Transfer) -> dict:
         # UI's own "guidance, not a gate" framing for the price cap.
         price = transfer.asking_price_kes
         royalty_kes, platform_fee_kes, payout_kes = _fee_split(
-            price, tier.organizer_royalty_percent if tier else 0.0
+            price, tier.organizer_royalty_percent if tier else 0.0,
+            current_fees(object_session(transfer)).platform_fee_percent,
         )
 
     return {
@@ -301,6 +305,8 @@ def create_listing(
     )
     if not ticket:
         raise HTTPException(status_code=404, detail="Ticket not found")
+    if not flag_on(db, "resale_marketplace", current_user.id):
+        raise HTTPException(status_code=403, detail="Resale isn't available on your account right now.")
     if ticket.status == TicketStatus.USED:
         raise HTTPException(status_code=400, detail="This ticket has already been used")
     if ticket.status == TicketStatus.RESALE:
@@ -532,6 +538,8 @@ async def buy_listing(
     send the STK push, return immediately — the callback (app/api/routes/
     payments.py's mpesa_callback / dev-confirm) does the rest.
     """
+    if not flag_on(db, "resale_marketplace"):
+        raise HTTPException(status_code=403, detail="Resale purchases are paused right now.")
     _release_stale_purchases(db)
     transfer = db.query(Transfer).filter(Transfer.id == listing_id).first()
     if not transfer:
@@ -637,7 +645,7 @@ def get_wallet(db: Session = Depends(get_db), current_user: User = Depends(get_c
         "available": wallet["available"],
         "pending": wallet["pending"],
         "onHold": wallet["onHold"],
-        "minWithdrawalKes": MIN_WITHDRAWAL_KES,
+        "minWithdrawalKes": current_fees(db).min_payout_kes,
         "transactions": [_serialize_wallet_transaction(t, include_available_at=True) for t in transactions],
     }
 
@@ -655,8 +663,9 @@ def withdraw_to_mpesa(
     always succeeds). This records the withdrawal for real; the actual
     money movement to a seller's phone is not implemented.
     """
-    if body.amount_kes < MIN_WITHDRAWAL_KES:
-        raise HTTPException(status_code=400, detail=f"Minimum withdrawal is KES {int(MIN_WITHDRAWAL_KES)}.")
+    min_payout = current_fees(db).min_payout_kes
+    if body.amount_kes < min_payout:
+        raise HTTPException(status_code=400, detail=f"Minimum withdrawal is KES {int(min_payout)}.")
 
     wallet = _compute_wallet(db, current_user.id)
     if body.amount_kes > wallet["available"]:

@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.db.session import get_db
 from app.core.dependencies import get_current_user
-from app.models.models import User, Event, OrganizerMember, OrganizerRole, GateScanner, GateScannerStatus
+from app.models.models import User, Event, Organizer, OrganizerMember, OrganizerRole, GateScanner, GateScannerStatus
 
 
 class RoleLevel(IntEnum):
@@ -64,6 +64,15 @@ def check_org_role(db: Session, user_id: str, organization_id: str, minimum_role
     )
     if not member or _ROLE_LEVEL[member.role] < minimum_level:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Not authorised for this organisation")
+    if minimum_level >= RoleLevel.OWNER:
+        # A suspended organisation keeps read access (its data, its staff's
+        # scanning) but can't change anything until an admin reinstates it.
+        org = db.get(Organizer, organization_id)
+        if org and org.suspended_at:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"ChainTix has suspended this organisation ({org.suspended_reason}). Contact ChainTix support.",
+            )
     return member
 
 
@@ -114,6 +123,29 @@ def require_platform_admin(current_user: User = Depends(get_current_user)) -> Us
     if not current_user.is_platform_admin:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Platform admin only")
     return current_user
+
+
+ADMIN_ROLES = ("super_admin", "support", "finance", "compliance")
+_ADMIN_ROLE_LABELS = {"super_admin": "Super Admins", "support": "Support", "finance": "Finance", "compliance": "Compliance"}
+
+
+def admin_role(user: User) -> str:
+    """Admins promoted before roles existed have none: they're super admins."""
+    return user.platform_admin_role or "super_admin"
+
+
+def require_admin_role(*roles: str):
+    """Every admin can read every admin page; changing one is limited to
+    the roles responsible for it — and super admins, who can do anything."""
+    allowed = {"super_admin", *roles}
+
+    def _dep(admin: User = Depends(require_platform_admin)) -> User:
+        if admin_role(admin) not in allowed:
+            names = " or ".join(_ADMIN_ROLE_LABELS[r] for r in sorted(allowed))
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=f"Only {names} can do this.")
+        return admin
+
+    return _dep
 
 
 # ─── Scanner device-token identity (B4) ────────────────────────────────────

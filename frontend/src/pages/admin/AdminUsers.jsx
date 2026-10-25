@@ -7,14 +7,17 @@ import { Table, Badge, Button, Modal, Select, Input, EmptyState, ErrorState } fr
 
 const ROLES = [
   { value: "super_admin", label: "Super Admin — full access" },
-  { value: "support", label: "Support — read-only + communication" },
-  { value: "finance", label: "Finance — costs, fees, payouts" },
-  { value: "compliance", label: "Compliance — resale, fraud, audit log" },
+  { value: "support", label: "Support — read-only + broadcasts" },
+  { value: "finance", label: "Finance — read-only + fee changes" },
+  { value: "compliance", label: "Compliance — read-only + organiser and event reviews" },
 ];
+// Every role can view every admin page; the label says what it can change.
+// Admin users and feature flags are super admins' alone.
 
 const STATUS_TONE = { invited: "warning", active: "success" };
 
 function InviteModal({ onClose, onInvited }) {
+  const toast = useToast();
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [role, setRole] = useState(ROLES[1].value);
@@ -24,8 +27,9 @@ function InviteModal({ onClose, onInvited }) {
     e.preventDefault();
     setBusy(true);
     try {
-      await api.inviteAdminUser({ name, phone, role });
-      onInvited();
+      onInvited(await api.inviteAdminUser({ name, phone, role }));
+    } catch (err) {
+      toast.push(err instanceof ApiError ? err.message : "Couldn't send that invite.", { tone: "danger" });
     } finally {
       setBusy(false);
     }
@@ -51,7 +55,7 @@ export default function AdminUsers() {
   const [inviteOpen, setInviteOpen] = useState(false);
 
   async function remove(a) {
-    if (!window.confirm(`Remove ${a.name} from platform admins?`)) return;
+    if (!window.confirm(a.status === "invited" ? `Cancel the invite for ${a.name}?` : `Remove ${a.name} from platform admins?`)) return;
     try {
       await api.removeAdminUser(a.id);
       toast.push("Admin user removed.", { tone: "success" });
@@ -82,10 +86,14 @@ export default function AdminUsers() {
           { key: "status", header: "Status", render: (a) => <Badge tone={STATUS_TONE[a.status] || "neutral"}>{a.status}</Badge> },
           { key: "invited_at", header: "Since", render: (a) => <span className="tabular-nums">{new Date(a.invited_at).toLocaleDateString("en-KE", { day: "2-digit", month: "short", year: "numeric" })}</span> },
         ]}
-        rowActions={(a) => (a.id === "admin-you" ? [] : [{ label: "Remove", danger: true, onClick: () => remove(a) }])}
+        rowActions={(a) => (a.is_you || a.id === "admin-you" ? [] : [{ label: a.status === "invited" ? "Cancel invite" : "Remove", danger: true, onClick: () => remove(a) }])}
       />}
 
-      {inviteOpen && <InviteModal onClose={() => setInviteOpen(false)} onInvited={() => { setInviteOpen(false); toast.push("Invite sent.", { tone: "success" }); retry(); }} />}
+      {inviteOpen && <InviteModal onClose={() => setInviteOpen(false)} onInvited={(admin) => {
+        setInviteOpen(false);
+        toast.push(admin?.status === "active" ? `${admin.name} is now an admin.` : "Invited. They become an admin the first time they sign in with that number.", { tone: "success" });
+        retry();
+      }} />}
     </div>
   );
 }

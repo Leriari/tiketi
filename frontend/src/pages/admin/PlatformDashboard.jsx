@@ -19,11 +19,11 @@ export default function PlatformDashboard() {
       ) : (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
           <StatCard label="Gross Merchandise Value" value={<MoneyText value={data.gmv} size="h3" />} hint="Primary + resale, all-time" emphasised />
-          <StatCard label="Platform Fee Revenue" value={<MoneyText value={data.platformFeeRevenue} size="h3" variant="positive" />} hint="5% of primary sales" />
+          <StatCard label="Platform Fee Revenue" value={<MoneyText value={data.platformFeeRevenue} size="h3" variant="positive" />} hint={`${data.platformFeePercent ?? 5}% of primary sales, plus resale fees`} />
           <StatCard label="Active Events" value={data.activeEvents} hint="Live or sold out" />
           <StatCard label="Tickets Sold Today" value={data.ticketsSoldToday} />
           <StatCard label="Organisers" value={data.organiserCount} hint="Verified + pending" />
-          <StatCard label="Failed Mints" value={data.failedMintCount} hint="Nothing stuck right now" />
+          <StatCard label="Failed Mints" value={data.failedMintCount} hint={data.failedMintCount ? "Paid tickets with no NFT after 10 minutes" : "Nothing stuck right now"} />
           <StatCard label="Payout Queue Depth" value={data.payoutQueueDepth} hint="Pending seller + organiser payouts" />
         </div>
       )}

@@ -13,12 +13,16 @@ from datetime import datetime, timezone
 from urllib.parse import quote
 
 from fastapi import HTTPException
+from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.models.models import Event, EventStatus, EventTier, TierStatus, Ticket, Organizer, User
+from app.models.models import (
+    Event, EventStatus, EventTier, TierStatus, Ticket, Organizer, OrganizerVerificationStatus, User,
+)
 from app.schemas.schemas import EventDetailsIn, TierIn, EVENT_STATUS_FROM_UI, EVENT_STATUS_TO_UI
 from app.services import event_images
+from app.services.platform_settings import flag_on
 
 settings = get_settings()
 
@@ -40,6 +44,42 @@ def _naive_utc(value: datetime | None) -> datetime | None:
 
 def ui_status(event: Event) -> str:
     return EVENT_STATUS_TO_UI.get(event.status.value, event.status.value)
+
+
+def not_suspended():
+    """Filter clause for anything the public sees: the event's organisation,
+    if it has one, isn't suspended."""
+    suspended = select(Organizer.id).where(Organizer.suspended_at.isnot(None))
+    return or_(Event.organizer_id.is_(None), Event.organizer_id.not_in(suspended))
+
+
+def organisation_suspended(db: Session, event: Event) -> bool:
+    org = db.get(Organizer, event.organizer_id) if event.organizer_id else None
+    return bool(org and org.suspended_at)
+
+
+_PUBLIC = (EventStatus.PUBLISHED, EventStatus.SOLD_OUT)
+_WAS_PUBLIC = _PUBLIC + (EventStatus.PAUSED, EventStatus.COMPLETED)
+
+
+def _publish_or_hold(db: Session, event: Event, target: EventStatus, previous_status: EventStatus | None) -> EventStatus:
+    """
+    Going public. An organisation ChainTix rejected can't; one it hasn't
+    verified waits in Event Approvals while that flag is on (for it). An
+    event that has been public, or was approved, isn't reviewed again.
+    """
+    org = db.get(Organizer, event.organizer_id) if event.organizer_id else None
+    if org and org.verification_status == OrganizerVerificationStatus.REJECTED:
+        _bad("ChainTix couldn't verify this organisation, so its events can't go live. Contact ChainTix support.")
+    if previous_status in _WAS_PUBLIC or event.review_state == "approved":
+        return target
+    if not (org and org.verification_status != OrganizerVerificationStatus.VERIFIED and flag_on(db, "event_approval", org.id)):
+        return target
+    if event.review_state != "pending":
+        event.review_state = "pending"
+        event.review_note = None
+        event.submitted_for_review_at = datetime.utcnow()
+    return EventStatus.DRAFT
 
 
 def resale_multiplier(event: Event) -> float:
@@ -70,6 +110,9 @@ def apply_event_details(db: Session, event: Event, body: EventDetailsIn, *, crea
     """
     target_status = body.status or (ui_status(event) if not creating else "live")
     is_draft = target_status == "draft"
+    # Before anything below flushes: a new event is inserted with the
+    # column default (published) the moment its tiers are saved.
+    previous_status = None if creating else event.status
 
     for field in ("title", "category", "description", "description_html", "artists"):
         value = getattr(body, field)
@@ -195,7 +238,12 @@ def apply_event_details(db: Session, event: Event, body: EventDetailsIn, *, crea
             if (t.visibility or "public") == "public" and t.price_kes <= 0:
                 _bad(f"\"{t.tier_name}\" is free and public. M-Pesa can't charge KES 0 — give it a price, "
                      "or make it hidden and hand those tickets out as complimentary tickets.")
-    event.status = EventStatus(EVENT_STATUS_FROM_UI[target_status])
+    target = EventStatus(EVENT_STATUS_FROM_UI[target_status])
+    if target in _PUBLIC:
+        target = _publish_or_hold(db, event, target, previous_status)
+    elif is_draft and event.review_state == "pending":
+        event.review_state = None  # saved back to draft: withdrawn from review
+    event.status = target
 
 
 def tier_out(tier: EventTier, multiplier: float) -> dict:
@@ -253,6 +301,10 @@ def event_out(event: Event, organisation: Organizer | None = None) -> dict:
         "resale_royalty_percent": event.resale_royalty_percent or DEFAULT_ROYALTY_PERCENT,
         "resale_ceiling_multiplier": multiplier,
         "resale_enabled": bool(event.resale_enabled),
+        # Event Approvals: pending | approved | rejected, or null when no
+        # review applied. review_note is the admin's reason for a rejection.
+        "review_state": event.review_state,
+        "review_note": event.review_note,
         "resale_window_open_days": event.resale_window_open_days or 0,
         "resale_window_close_hours": event.resale_window_close_hours if event.resale_window_close_hours is not None else 2,
         "status": status,

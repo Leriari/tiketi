@@ -69,7 +69,7 @@ def list_events(
     """List all public (published or sold-out) events."""
     events = (
         db.query(Event)
-        .filter(Event.status.in_(_PUBLIC_STATUSES))
+        .filter(Event.status.in_(_PUBLIC_STATUSES), organiser_service.not_suspended())
         .order_by(Event.event_date)
         .offset(skip)
         .limit(limit)
@@ -104,7 +104,8 @@ def get_event_image(event_id: str, request: Request, db: Session = Depends(get_d
 def get_event(event_id: str, db: Session = Depends(get_db)):
     event = (
         db.query(Event)
-        .filter(Event.id == event_id, Event.status.in_(_PUBLIC_STATUSES + (EventStatus.COMPLETED,)))
+        .filter(Event.id == event_id, Event.status.in_(_PUBLIC_STATUSES + (EventStatus.COMPLETED,)),
+                organiser_service.not_suspended())
         .first()
     )
     if not event:

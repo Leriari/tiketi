@@ -30,3 +30,20 @@ def get_current_user(
     if payload.get("sv", 0) != (user.session_version or 0):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Session ended. Please sign in again.")
     return user
+
+
+_optional_bearer = HTTPBearer(auto_error=False)
+
+
+def get_optional_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_optional_bearer),
+    db: Session = Depends(get_db),
+) -> User | None:
+    """The signed-in user, or None for a visitor (or an expired token) —
+    for public pages that show a little more to someone signed in."""
+    if credentials is None:
+        return None
+    try:
+        return get_current_user(credentials, db)
+    except HTTPException:
+        return None

@@ -31,7 +31,7 @@ export default function FeatureFlags() {
     <div className="mx-auto max-w-3xl px-4 lg:px-6 py-6 flex flex-col gap-4">
       <div>
         <h1 className="text-h1 text-ink-primary">Feature Flags</h1>
-        <p className="text-body-sm text-ink-tertiary">These control what's visible in the product — not yet wired to a runtime gate in this build, so flipping one here doesn't change other screens today.</p>
+        <p className="text-body-sm text-ink-tertiary">Each switch changes how the live platform behaves, immediately. Rollout turns a flag on for a share of organisations or users. The same ones stay in, so behaviour is stable.</p>
       </div>
 
       {error ? (
@@ -43,7 +43,7 @@ export default function FeatureFlags() {
           {flags.map((f) => (
             <Card key={f.id} className="flex flex-col gap-3">
               <Toggle label={f.label} hint={f.description} checked={f.enabled} onChange={() => toggle(f)} />
-              <div className="flex items-center gap-3">
+              {f.supports_rollout !== false && <div className="flex items-center gap-3">
                 <input
                   type="range"
                   min="0"
@@ -55,7 +55,7 @@ export default function FeatureFlags() {
                   aria-label={`${f.label} rollout percentage`}
                 />
                 <span className="text-body-sm text-ink-secondary tabular-nums w-12 text-right">{f.rollout_percent}%</span>
-              </div>
+              </div>}
               <p className="text-caption text-ink-tertiary font-mono">{f.key}</p>
             </Card>
           ))}

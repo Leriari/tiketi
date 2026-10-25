@@ -12,8 +12,8 @@ export default function AuditLog() {
 
   async function exportCsv() {
     try {
-      await api.requestExport({ type: "audit_log", format: "csv" });
-      toast.push("Audit log export ready.", { tone: "success" });
+      await api.exportAuditLog({ query });
+      toast.push("Audit log downloaded.", { tone: "success" });
     } catch (err) {
       toast.push(err instanceof ApiError ? err.message : "Couldn't generate the export.", { tone: "danger" });
     }

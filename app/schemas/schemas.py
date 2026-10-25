@@ -252,6 +252,8 @@ class EventOut(BaseModel):
     map_url: Optional[str] = None
     contract_address: Optional[str]
     status: str
+    # pending when the event is waiting in Event Approvals (status stays draft).
+    review_state: Optional[str] = None
     created_at: datetime
     # Hidden/password tiers are the organiser's to hand out, never listed.
     tiers: list[TierOut] = Field(default=[], validation_alias="visible_tiers")
@@ -582,3 +584,70 @@ class PayoutDetailsUpdate(BaseModel):
 class ExportRequest(BaseModel):
     type: str  # ticket_sales | attendance | royalty_ledger | payouts
     format: str = "csv"
+
+
+# ─── Platform Admin ──────────────────────────────────────────────────────────
+
+class OrganiserReviewRequest(BaseModel):
+    decision: str
+    reason: Optional[str] = None
+
+    @field_validator("decision")
+    @classmethod
+    def valid_decision(cls, v):
+        if v not in ("verified", "rejected"):
+            raise ValueError("decision must be verified or rejected")
+        return v
+
+
+class AdminReasonRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class FeeConfigUpdate(BaseModel):
+    platformFeePercent: float = Field(ge=0, le=30)
+    scanningFeeKes: float = Field(ge=0, le=1000)
+    minPayoutKes: float = Field(ge=1, le=100_000)
+    sellerEscrowDays: int = Field(ge=0, le=60)
+    organiserEscrowDays: int = Field(ge=0, le=60)
+
+
+class BroadcastCreate(BaseModel):
+    message: str = Field(min_length=1, max_length=500)
+    channels: list[str] = Field(min_length=1)
+    audience: str
+    scheduledFor: Optional[datetime] = None
+
+    @field_validator("scheduledFor", mode="before")
+    @classmethod
+    def blank_is_none(cls, v):
+        return None if v in ("", None) else v
+
+    @field_validator("audience")
+    @classmethod
+    def valid_audience(cls, v):
+        if v not in ("all", "attendees", "organisers", "gate_staff"):
+            raise ValueError("audience must be all, attendees, organisers or gate_staff")
+        return v
+
+
+class AdminInviteRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    phone: str
+    role: str
+
+    @field_validator("phone")
+    @classmethod
+    def validate_phone(cls, v):
+        return normalize_kenyan_phone(v)
+
+    @field_validator("role")
+    @classmethod
+    def valid_role(cls, v):
+        if v not in ("super_admin", "support", "finance", "compliance"):
+            raise ValueError("role must be super_admin, support, finance or compliance")
+        return v
+
+
+class FeatureFlagRollout(BaseModel):
+    rollout_percent: int = Field(ge=0, le=100)

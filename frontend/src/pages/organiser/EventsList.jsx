@@ -50,7 +50,11 @@ export default function EventsList() {
               ),
             },
             { key: "event_date", header: "Date", render: (e) => <span className="tabular-nums">{e.event_date ? formatEventDate(e.event_date) : "—"}</span> },
-            { key: "status", header: "Status", render: (e) => <Badge tone={STATUS_TONE[e.status] || "neutral"}>{e.status.replace("_", " ")}</Badge> },
+            { key: "status", header: "Status", render: (e) => (
+              e.review_state === "pending" ? <Badge tone="warning">in review</Badge>
+                : e.review_state === "rejected" && e.status === "draft" ? <Badge tone="danger">changes requested</Badge>
+                  : <Badge tone={STATUS_TONE[e.status] || "neutral"}>{e.status.replace("_", " ")}</Badge>
+            ) },
             { key: "tickets_sold", header: "Sold", render: (e) => <span className="tabular-nums">{e.tickets_sold} / {e.total_capacity}</span> },
           ]}
           rowActions={(e) => [

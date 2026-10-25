@@ -4,6 +4,7 @@ import { api, ApiError } from "../../api";
 import { useApiData } from "../../lib/useApiData";
 import { useToast } from "../../components/ui/Toast";
 import { Card, Textarea, Checkbox, Select, DatePicker, Toggle, Button, Badge, EmptyState, ErrorState, Skeleton } from "../../components/ui";
+import { localInputToUtc } from "../../format";
 
 const CHANNELS = [
   { value: "sms", label: "SMS" },
@@ -23,8 +24,10 @@ const STATUS_TONE = { sent: "success", scheduled: "warning" };
 export default function CommunicationCenter() {
   const toast = useToast();
   const { data: broadcasts, error, retry } = useApiData(() => api.getBroadcasts());
+  // Which channels this server can actually deliver on, and why not.
+  const { data: available } = useApiData(() => api.getBroadcastChannels());
   const [message, setMessage] = useState("");
-  const [channels, setChannels] = useState(["sms"]);
+  const [channels, setChannels] = useState(["in_app"]);
   const [audience, setAudience] = useState("all");
   const [scheduleLater, setScheduleLater] = useState(false);
   const [scheduledFor, setScheduledFor] = useState("");
@@ -38,7 +41,7 @@ export default function CommunicationCenter() {
     e.preventDefault();
     setBusy(true);
     try {
-      await api.sendBroadcast({ message, channels, audience, scheduledFor: scheduleLater ? scheduledFor : null });
+      await api.sendBroadcast({ message, channels, audience, scheduledFor: scheduleLater ? localInputToUtc(scheduledFor) : null });
       toast.push(scheduleLater ? "Broadcast scheduled." : "Broadcast sent.", { tone: "success" });
       setMessage("");
       retry();
@@ -59,10 +62,27 @@ export default function CommunicationCenter() {
         <div>
           <p className="text-label uppercase tracking-[0.06em] text-ink-tertiary font-medium mb-2">Channels</p>
           <div className="flex gap-5">
-            {CHANNELS.map((c) => (
-              <Checkbox key={c.value} label={c.label} checked={channels.includes(c.value)} onChange={(checked) => toggleChannel(c.value, checked)} />
-            ))}
+            {CHANNELS.map((c) => {
+              const off = available && available[c.value]?.available === false;
+              return (
+                <Checkbox
+                  key={c.value}
+                  label={off ? `${c.label} (not set up)` : c.label}
+                  title={off ? available[c.value].reason : undefined}
+                  disabled={off}
+                  className={off ? "opacity-60 cursor-not-allowed" : undefined}
+                  checked={!off && channels.includes(c.value)}
+                  onChange={(checked) => toggleChannel(c.value, checked)}
+                />
+              );
+            })}
           </div>
+          {available && CHANNELS.some((c) => available[c.value]?.available === false) && (
+            <p className="text-caption text-ink-tertiary mt-2">
+              {CHANNELS.filter((c) => available[c.value]?.available === false).map((c) => available[c.value].reason).join(" ")}{" "}
+              In-app messages appear as a banner for the chosen audience.
+            </p>
+          )}
         </div>
 
         <Select label="Audience" value={audience} onChange={(e) => setAudience(e.target.value)}>
@@ -108,7 +128,9 @@ export default function CommunicationCenter() {
               {b.status === "sent" && (
                 <div className="flex flex-wrap gap-3 text-caption">
                   {Object.entries(b.delivery).map(([ch, d]) => (
-                    <span key={ch} className="text-ink-secondary">{CHANNELS.find((c) => c.value === ch)?.label}: {d.delivered}/{d.sent} delivered</span>
+                    <span key={ch} className="text-ink-secondary">
+                      {CHANNELS.find((c) => c.value === ch)?.label}: {ch === "in_app" ? `shown to ${d.sent} people` : `${d.delivered}/${d.sent} delivered`}
+                    </span>
                   ))}
                 </div>
               )}

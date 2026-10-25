@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { api } from "../../api";
+import { api, ApiError } from "../../api";
 import { useToast } from "../../components/ui/Toast";
-import { Card, Input, Button, Table, EmptyState, Skeleton } from "../../components/ui";
+import { Card, Input, Button, Table, EmptyState, ErrorState, Skeleton } from "../../components/ui";
 
 const FIELDS = [
   { key: "platformFeePercent", label: "Platform fee", suffix: "%" },
@@ -17,13 +17,15 @@ export default function FeeConfiguration() {
   const [history, setHistory] = useState([]);
   const [form, setForm] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [loadError, setLoadError] = useState(null);
 
   function load() {
+    setLoadError(null);
     api.getFeeConfig().then(({ current, history }) => {
       setCurrent(current);
       setHistory(history);
       setForm(current);
-    });
+    }).catch((err) => setLoadError(err instanceof ApiError ? err.message : "Couldn't load the fee configuration."));
   }
   useEffect(load, []);
 
@@ -40,11 +42,14 @@ export default function FeeConfiguration() {
       });
       toast.push("Fee configuration updated.", { tone: "success" });
       load();
+    } catch (err) {
+      toast.push(err instanceof ApiError ? err.message : "Couldn't save the fee configuration.", { tone: "danger" });
     } finally {
       setBusy(false);
     }
   }
 
+  if (loadError) return <div className="mx-auto max-w-2xl px-4 py-6"><ErrorState description={loadError} onRetry={load} /></div>;
   if (!form) return <div className="mx-auto max-w-2xl px-4 py-6"><Skeleton className="h-96 w-full" /></div>;
 
   return (

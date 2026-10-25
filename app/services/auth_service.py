@@ -194,7 +194,19 @@ def issue_session(db: Session, user: User, method: str, request=None) -> str:
     """Issue an access token and record the sign-in in the audit log, so the
     user's activity log can show when and how their account was accessed
     (and "Not you? Sign out everywhere" has something to point at)."""
-    from app.models.models import AuditLog
+    from app.models.models import AdminInvite, AuditLog
+
+    # An admin invited this number before it had an account (Admin Users).
+    invite = db.query(AdminInvite).filter(AdminInvite.phone_number == user.phone_number).first()
+    if invite:
+        user.is_platform_admin = True
+        user.platform_admin_role = invite.role
+        user.platform_admin_since = datetime.utcnow()
+        if not user.display_name:
+            user.display_name = invite.name
+        db.add(AuditLog(actor_id=invite.invited_by, action_type="admin_invite_accepted", target_id=user.id,
+                        target_type="user", details=f"role={invite.role}"))
+        db.delete(invite)
 
     parts = [f"method={method}"]
     if request is not None:

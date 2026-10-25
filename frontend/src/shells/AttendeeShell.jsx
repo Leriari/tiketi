@@ -7,6 +7,7 @@ import { formatPhone } from "../format";
 import { cn } from "../lib/cn";
 import InstallPrompt from "../components/InstallPrompt";
 import BrandMark from "../components/BrandMark";
+import AnnouncementBanner from "../components/AnnouncementBanner";
 
 const TABS = [
   { to: "/", label: "Discover", icon: Compass, end: true },
@@ -99,6 +100,8 @@ export default function AttendeeShell() {
             </div>
           </div>
         </header>
+
+        <AnnouncementBanner />
 
         <main className="flex-1 pb-20 lg:pb-0">
           <Outlet />
