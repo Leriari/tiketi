@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import jsQR from "jsqr";
 import { Wifi, WifiOff, CheckCircle2, XCircle, ChevronUp, Trash2, UploadCloud, KeyRound } from "lucide-react";
 import { api, ApiError } from "../../api";
 import { Button, Input, Drawer, Badge } from "../../components/ui";
+import QrCamera from "../../components/QrCamera";
 import { validate } from "../../scanner/validate";
 import {
   getMeta, countCredentials, countPendingUpload, getAllAdmissions,
@@ -15,9 +15,6 @@ const LOG_LIMIT = 12;
 
 export default function Scan() {
   const navigate = useNavigate();
-  const videoRef = useRef(null);
-  const canvasRef = useRef(document.createElement("canvas"));
-  const rafRef = useRef(null);
   const resultRef = useRef(null);
   const processingRef = useRef(false);
   const uploadingRef = useRef(false);
@@ -25,7 +22,6 @@ export default function Scan() {
   const [meta, setMeta] = useState(() => getMeta());
   const [credentialCount, setCredentialCount] = useState(0);
   const [pendingUpload, setPendingUpload] = useState(0);
-  const [cameraState, setCameraState] = useState("requesting"); // requesting | active | denied | unavailable
   const [manualCode, setManualCode] = useState("");
   const [result, setResult] = useState(null);
   const [online, setOnline] = useState(navigator.onLine);
@@ -78,50 +74,6 @@ export default function Scan() {
       processingRef.current = false;
     }
   }, [meta]);
-
-  // Camera viewfinder — spec §6.2. Falls back to manual entry if unavailable;
-  // scanning runs entirely against the local cache (applyScan -> validate.js
-  // -> credentialStore.js), no network.
-  useEffect(() => {
-    let stream;
-    let cancelled = false;
-
-    async function start() {
-      try {
-        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-        if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
-        if (videoRef.current) {
-          videoRef.current.srcObject = stream;
-          await videoRef.current.play();
-        }
-        setCameraState("active");
-        tick();
-      } catch {
-        if (!cancelled) setCameraState(navigator.mediaDevices ? "denied" : "unavailable");
-      }
-    }
-
-    function tick() {
-      rafRef.current = requestAnimationFrame(tick);
-      const video = videoRef.current;
-      if (!video || video.readyState !== video.HAVE_ENOUGH_DATA || resultRef.current || processingRef.current) return;
-      const canvas = canvasRef.current;
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      const ctx = canvas.getContext("2d", { willReadFrequently: true });
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const frame = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const code = jsQR(frame.data, frame.width, frame.height);
-      if (code?.data) applyScan(code.data);
-    }
-
-    start();
-    return () => {
-      cancelled = true;
-      cancelAnimationFrame(rafRef.current);
-      stream?.getTracks().forEach((t) => t.stop());
-    };
-  }, [applyScan]);
 
   // Auto-dismiss a grant after 2.5s; a denial requires an explicit tap (never auto-dismiss).
   useEffect(() => {
@@ -212,25 +164,9 @@ export default function Scan() {
         </div>
       )}
 
-      {/* Viewfinder — upper half */}
-      <div className="relative flex-none h-[52vh] bg-black overflow-hidden">
-        <video ref={videoRef} className="h-full w-full object-cover" muted playsInline />
-        {cameraState === "active" && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-            <div className="h-56 w-56 rounded-lg border-4 border-white/80" />
-            <p className="mt-4 text-body-sm font-medium text-white/90 bg-black/40 px-3 py-1 rounded-full">Align QR code within frame</p>
-          </div>
-        )}
-        {cameraState === "requesting" && (
-          <div className="absolute inset-0 flex items-center justify-center text-body-sm text-white/70">Requesting camera…</div>
-        )}
-        {(cameraState === "denied" || cameraState === "unavailable") && (
-          <div className="absolute inset-0 flex flex-col items-center justify-center gap-1 px-6 text-center">
-            <p className="text-body font-semibold text-white">Camera unavailable</p>
-            <p className="text-body-sm text-white/70">Enter the ticket code manually below.</p>
-          </div>
-        )}
-      </div>
+      {/* Viewfinder — upper half (spec §6.2). Scanning runs entirely against
+          the local cache (applyScan -> validate.js -> credentialStore.js), no network. */}
+      <QrCamera onDecode={applyScan} paused={Boolean(result)} className="flex-none h-[52vh]" />
 
       {/* Manual entry — always available, primary fallback when the camera can't be used */}
       <div className="flex-1 flex flex-col justify-between px-4 py-4">
@@ -270,9 +206,9 @@ export default function Scan() {
           ) : (
             <>
               <p className="text-h2 text-white font-semibold">{result.reason}</p>
-              <Button variant="secondary" size="lg" className="mt-4 w-auto px-8 border-white text-white" onClick={(e) => { e.stopPropagation(); setResult(null); }}>
+              <button type="button" className="mt-4 min-h-[48px] rounded-md border-2 border-white px-8 text-body font-semibold text-white hover:bg-white/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-white" onClick={(e) => { e.stopPropagation(); setResult(null); }}>
                 Dismiss
-              </Button>
+              </button>
             </>
           )}
         </div>
