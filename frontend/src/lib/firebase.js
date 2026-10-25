@@ -8,10 +8,23 @@
 
 let authPromise = null;
 
+// Run Google's sign-in handler from this site's own origin when the site is
+// on the project's Firebase Hosting (Hosting serves /__/auth/* on every one
+// of its domains). With the default *.firebaseapp.com handler, a page on
+// *.web.app is cross-site to it: Safari and other browsers that partition
+// third-party storage then fail sign-in with "missing initial state".
+// Needs https://<this host>/__/auth/handler in the Google OAuth client's
+// authorised redirect URIs (deploy/DEPLOY.md).
+function sameSiteAuthDomain(config) {
+  const host = window.location.host;
+  const id = config.projectId;
+  return host === `${id}.web.app` || host === `${id}.firebaseapp.com` ? host : config.authDomain;
+}
+
 function getFirebaseAuth(config) {
   if (!authPromise) {
     authPromise = Promise.all([import("firebase/app"), import("firebase/auth")]).then(([appMod, authMod]) => {
-      const app = appMod.getApps()[0] || appMod.initializeApp(config);
+      const app = appMod.getApps()[0] || appMod.initializeApp({ ...config, authDomain: sameSiteAuthDomain(config) });
       const auth = authMod.getAuth(app);
       auth.useDeviceLanguage();
       return { auth, authMod };
