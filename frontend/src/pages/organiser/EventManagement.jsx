@@ -42,6 +42,7 @@ export default function EventManagement() {
   const [endsAt, setEndsAt] = useState("");
   const [description, setDescription] = useState("");
   const [status, setStatus] = useState("live");
+  const [review, setReview] = useState({ state: null, note: null });
   const [capacity, setCapacity] = useState("");
   const [resaleEnabled, setResaleEnabled] = useState(true);
   const [resaleCapPct, setResaleCapPct] = useState(120);
@@ -64,6 +65,7 @@ export default function EventManagement() {
       setEndsAt(utcToLocalInput(ev.ends_at));
       setDescription(ev.description_html || ev.description || "");
       setStatus(ev.status);
+      setReview({ state: ev.review_state, note: ev.review_note });
       setCapacity(String(ev.total_capacity));
       setResaleEnabled(ev.resale_enabled);
       setResaleCapPct(Math.round(ev.resale_ceiling_multiplier * 100));
@@ -186,7 +188,12 @@ export default function EventManagement() {
       const result = isEdit ? await api.updateEvent(eventId, payload) : await api.createEvent(payload);
       setDirty(false);
       setImageChanged(false);
-      toast.push(isEdit ? "Event updated." : "Event published.", { tone: "success" });
+      if (result.review_state === "pending" && nextStatus !== "draft") {
+        toast.push("Submitted for review. ChainTix publishes it once approved, usually within a day.", { tone: "success" });
+      } else {
+        toast.push(isEdit ? "Event updated." : "Event published.", { tone: "success" });
+      }
+      setReview({ state: result.review_state, note: result.review_note });
       navigate(`/organiser/events/${result.id}/edit`, { replace: true });
     } catch (err) {
       toast.push(err instanceof ApiError ? err.message : "Couldn't save this event.", { tone: "danger" });
@@ -207,6 +214,16 @@ export default function EventManagement() {
         <span className="text-ink-secondary">{isEdit ? title || "Edit" : "New event"}</span>
       </nav>
       <h1 className="text-h1 text-ink-primary mb-6">{isEdit ? "Edit event" : "Create an event"}</h1>
+      {review.state === "pending" && (
+        <p role="status" className="mb-6 rounded-md bg-warning-bg text-warning-on-tint px-4 py-2.5 text-body-sm">
+          <strong className="font-semibold">In review.</strong> ChainTix checks events from organisations it hasn't verified yet. This one goes live as soon as it's approved.
+        </p>
+      )}
+      {review.state === "rejected" && status === "draft" && (
+        <p role="status" className="mb-6 rounded-md bg-danger-bg text-danger-on-tint px-4 py-2.5 text-body-sm">
+          <strong className="font-semibold">ChainTix asked for changes:</strong> {review.note} Save the event again to resubmit it.
+        </p>
+      )}
 
       <div className="grid lg:grid-cols-[300px_1fr] gap-8">
         {/* Live preview */}

@@ -141,7 +141,7 @@ def settle_resale_transfer(self, transfer_id: str):
     from app.services import web3_service
     from app.services.totp_service import generate_totp_secret
     from app.core.crypto import encrypt_secret
-    from app.core.constants import PLATFORM_FEE_PERCENT
+    from app.services.platform_settings import current_fees
 
     if not settings.BLOCKCHAIN_CONFIGURED:
         logger.info(f"[SKIP] Blockchain not configured — transfer={transfer_id} stays unsettled.")
@@ -173,8 +173,9 @@ def settle_resale_transfer(self, transfer_id: str):
         tier = ticket.tier
         royalty_percent = tier.organizer_royalty_percent if tier else 0.0
         price = transfer.asking_price_kes
+        fees = current_fees(db)  # the rates in force when the sale settles
         royalty_kes = round(price * royalty_percent / 100)
-        platform_fee_kes = round(price * PLATFORM_FEE_PERCENT / 100)
+        platform_fee_kes = round(price * fees.platform_fee_percent / 100)
         payout_kes = price - royalty_kes - platform_fee_kes
 
         transfer.status = TransferStatus.COMPLETED
@@ -207,7 +208,7 @@ def settle_resale_transfer(self, transfer_id: str):
         # ── Record the seller's payout ─────────────────────────────────────
         event = transfer.event
         available_at = (
-            event.event_date + timedelta(days=2) if event else datetime.now(timezone.utc)
+            event.event_date + timedelta(days=fees.seller_escrow_days) if event else datetime.now(timezone.utc)
         )
         db.add(WalletTransaction(
             user_id=seller_id,

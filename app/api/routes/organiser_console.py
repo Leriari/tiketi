@@ -25,7 +25,6 @@ from sqlalchemy.orm import Session
 
 from app.core.authz import require_org_role
 from app.core.config import get_settings
-from app.core.constants import PLATFORM_FEE_PERCENT, MIN_WITHDRAWAL_KES
 from app.core.crypto import encrypt_secret
 from app.db.session import get_db
 from app.models.models import (
@@ -40,6 +39,7 @@ from app.schemas.schemas import (
 from app.services import organiser_service
 from app.services.auth_service import get_or_create_user
 from app.services.gate_partitioning import assign_gate
+from app.services.platform_settings import DEFAULT_FEES, FeeHistory, current_fees
 from app.services.totp_service import generate_totp_secret
 from app.worker import mint_ticket_nft
 
@@ -50,11 +50,10 @@ settings = get_settings()
 read_access = require_org_role(OrganizerRole.STAFF)
 owner_access = require_org_role(OrganizerRole.OWNER)
 
-# Per-ticket "door scanning" fee charged to organisers (spec.md §5.3) —
-# matches the figure the console's mock used.
-SCANNING_FEE_PER_TICKET_KES = 10.0
-# Organiser earnings release this long after the event.
-PAYOUT_RELEASE_DAYS = 4
+# The platform fee, per-ticket scanning fee (spec.md §5.3) and how long
+# after the event organiser earnings release all come from the admin's fee
+# schedule (app/services/platform_settings.py), at the rates in force when
+# each sale was paid.
 # A paid ticket still unminted after this long is treated as a failed mint.
 MINT_GRACE = timedelta(minutes=10)
 
@@ -153,8 +152,10 @@ def _completed_resales(db: Session, event_ids: list[str]) -> list[Transfer]:
 
 def _ledger(db: Session, events: list[Event]) -> list[dict]:
     """Every organiser money movement: one row per primary sale (gross,
-    5% platform fee, KES 10/ticket scanning fee, net) and one per settled
-    resale royalty. Each releases PAYOUT_RELEASE_DAYS after its event."""
+    platform fee, per-ticket scanning fee, net) and one per settled resale
+    royalty. Each is charged, and releases a number of days after its
+    event, per the fee schedule in force when it was paid."""
+    history = FeeHistory(db)
     by_id = {e.id: e for e in events}
     event_ids = list(by_id)
     rows = []
@@ -164,25 +165,32 @@ def _ledger(db: Session, events: list[Event]) -> list[dict]:
             continue
         gross = float(p.amount_kes)
         qty = p.quantity or 1
-        fee = round(gross * PLATFORM_FEE_PERCENT / 100)
-        scanning = SCANNING_FEE_PER_TICKET_KES * qty
+        at = _naive(p.confirmed_at) or _naive(p.initiated_at)
+        fees = history.at(at)
+        fee = round(gross * fees.platform_fee_percent / 100)
+        scanning = fees.scanning_fee_kes * qty
         rows.append({
             "type": "primary_sale", "event": event, "gross": gross, "fee": fee, "scanning_fee": scanning,
-            "net": gross - fee - scanning, "quantity": qty, "tier_id": p.tier_id,
-            "at": _naive(p.confirmed_at) or _naive(p.initiated_at),
-            "available_at": event.event_date + timedelta(days=PAYOUT_RELEASE_DAYS),
+            "net": gross - fee - scanning, "quantity": qty, "tier_id": p.tier_id, "at": at,
+            "available_at": event.event_date + timedelta(days=fees.organiser_escrow_days),
         })
     for t in _completed_resales(db, event_ids):
         event = by_id.get(t.event_id)
         if not event:
             continue
+        at = _naive(t.transferred_at) or _naive(t.created_at)
         rows.append({
             "type": "royalty", "event": event, "gross": 0.0, "fee": 0.0, "scanning_fee": 0.0,
             "net": float(t.organizer_royalty_kes or 0), "resale_price": float(t.transfer_price_kes or 0),
-            "at": _naive(t.transferred_at) or _naive(t.created_at),
-            "available_at": event.event_date + timedelta(days=PAYOUT_RELEASE_DAYS),
+            "at": at, "available_at": event.event_date + timedelta(days=history.at(at).organiser_escrow_days),
         })
     return rows
+
+
+def _release_at(rows: list[dict], event: Event) -> datetime:
+    """When all of one event's earnings have released (rows from _ledger)."""
+    return max((r["available_at"] for r in rows if r["event"].id == event.id),
+               default=event.event_date + timedelta(days=DEFAULT_FEES.organiser_escrow_days))
 
 
 def _wallet(rows: list[dict]) -> dict:
@@ -478,7 +486,7 @@ def earnings(organization_id: str, _m: OrganizerMember = Depends(read_access), d
             "resale_royalties_kes": royalty_kes,
             "fees_kes": fees,
             "net_kes": online - fees + royalty_kes,
-            "payout_status": "Available" if e.event_date + timedelta(days=PAYOUT_RELEASE_DAYS) <= now else "Pending",
+            "payout_status": "Available" if _release_at(rows, e) <= now else "Pending",
             "tiers": tier_rows,
         })
 
@@ -499,7 +507,7 @@ def earnings(organization_id: str, _m: OrganizerMember = Depends(read_access), d
             "availableBalance": wallet["available"],
             # Payouts are never executed by this platform yet.
             "totalPaidOut": 0,
-            "minPayoutKes": MIN_WITHDRAWAL_KES,
+            "minPayoutKes": current_fees(db).min_payout_kes,
         },
         "totals": {
             "totalRevenue": sum(r["gross"] for r in primary),
@@ -859,7 +867,7 @@ def _export_rows(db: Session, organization_id: str, export_type: str, events: li
             er = [r for r in ledger if r["event"].id == e.id]
             if not er:
                 continue
-            release = e.event_date + timedelta(days=PAYOUT_RELEASE_DAYS)
+            release = _release_at(er, e)
             rows.append([
                 e.title, _iso(e.event_date), sum(r["gross"] for r in er), sum(r["fee"] + r["scanning_fee"] for r in er),
                 sum(r["net"] for r in er if r["type"] == "royalty"), sum(r["net"] for r in er), release.date().isoformat(),

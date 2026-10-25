@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from "react-router-dom";
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import ScrollToTop from "./ScrollToTop";
 import AuthErrorToast from "./AuthErrorToast";
 import { RequireAuth, RequireOrgMembership, RequirePlatformAdmin, RequireDeviceToken } from "./routeGuards";
@@ -76,6 +76,11 @@ import ComponentsShowcase from "./pages/dev/ComponentsShowcase";
 // next. Each surface owns
 // its own ThemeProvider default inside its shell (Attendee/Seller = dark)
 // rather than one global provider, since surfaces disagree on default theme.
+function OrganizerSpellingRedirect() {
+  const { pathname, search } = useLocation();
+  return <Navigate to={pathname.replace(/^\/organizer/, "/organiser") + search} replace />;
+}
+
 export default function App() {
   return (
     <BrowserRouter>
@@ -161,6 +166,9 @@ export default function App() {
                 <Route path="team" element={<TeamRoles />} />
               </Route>
             </Route>
+
+            {/* The US spelling is what people type; keep any sub-path. */}
+            <Route path="/organizer/*" element={<OrganizerSpellingRedirect />} />
 
             <Route path="/scanner" element={<ScannerShell />}>
               <Route index element={<ScannerSync />} />

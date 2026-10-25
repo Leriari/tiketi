@@ -56,7 +56,7 @@ export default function EventApprovals() {
     <div className="mx-auto max-w-4xl px-4 lg:px-6 py-6 flex flex-col gap-4">
       <div>
         <h1 className="text-h1 text-ink-primary">Event Approvals</h1>
-        <p className="text-body-sm text-ink-tertiary">Draft events submitted by organisers, awaiting a policy review before they go live.</p>
+        <p className="text-body-sm text-ink-tertiary">Events from organisers ChainTix hasn't verified yet, waiting for a policy review before they go live (Feature Flags → "Approve events before they go live").</p>
       </div>
 
       {error ? (
@@ -64,7 +64,7 @@ export default function EventApprovals() {
       ) : queue === null ? (
         <div className="flex flex-col gap-3">{Array.from({ length: 2 }).map((_, i) => <Skeleton key={i} className="h-48 w-full" />)}</div>
       ) : queue.length === 0 ? (
-        <EmptyState title="Nothing awaiting review" description="Draft events an organiser saves show up here before they can go live." />
+        <EmptyState title="Nothing awaiting review" description="When an unverified organiser publishes an event, it waits here until you approve it." />
       ) : (
         queue.map((event) => (
           <Card key={event.id} className="flex flex-col lg:flex-row gap-4">
@@ -75,7 +75,7 @@ export default function EventApprovals() {
             <div className="flex-1 flex flex-col gap-3">
               <div>
                 <p className="text-h3 text-ink-primary">{event.title}</p>
-                <p className="text-body-sm text-ink-tertiary">{event.venue} · submitted {new Date(event.submitted_at).toLocaleDateString("en-KE", { day: "2-digit", month: "short" })}</p>
+                <p className="text-body-sm text-ink-tertiary">{event.organiser ? `${event.organiser} · ` : ""}{event.venue} · submitted {new Date(event.submitted_at).toLocaleDateString("en-KE", { day: "2-digit", month: "short" })}</p>
               </div>
 
               <div className="grid grid-cols-2 gap-1.5">

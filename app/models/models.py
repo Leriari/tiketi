@@ -170,11 +170,16 @@ class User(Base):
     # The one genuinely global role (Work Order 04 B1) — every other role is
     # a relationship to a specific organisation (OrganizerMember.role) or a
     # device identity (GateScanner's device token), not a flag on User.
-    # Nothing in the codebase can set this to True except the CLI script
-    # scripts/promote_platform_admin.py, run manually against the database —
+    # Set only by scripts/promote_platform_admin.py (run manually against the
+    # database) or by an existing super admin through Admin Users (audited) —
     # see B5: there must be no code path that lets a user grant it to
     # themselves.
     is_platform_admin: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Which admin pages this admin may change (app/api/routes/admin.py):
+    # super_admin | support | finance | compliance. Null on an admin means
+    # super_admin (admins promoted before roles existed).
+    platform_admin_role: Mapped[str | None] = mapped_column(String(20))
+    platform_admin_since: Mapped[datetime | None] = mapped_column(DateTime)
 
     tickets: Mapped[list["Ticket"]] = relationship("Ticket", back_populates="owner")
     payments: Mapped[list["Payment"]] = relationship("Payment", back_populates="user")
@@ -185,9 +190,9 @@ class User(Base):
 
 
 class Organizer(Base):
-    """A verified event-organizing business. Wired via app/api/routes/organisations.py
-    (Work Order 04 B2) — onboarding only, no verification workflow is built;
-    verification_status is set PENDING and never progressed automatically."""
+    """An event-organizing business. Created PENDING by
+    app/api/routes/organisations.py; a platform admin verifies or rejects
+    it, and can suspend it (app/api/routes/admin.py)."""
     __tablename__ = "organizers"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
@@ -205,6 +210,17 @@ class Organizer(Base):
     payout_method: Mapped[str | None] = mapped_column(String(20))  # "mpesa" | "bank"
     payout_destination: Mapped[str | None] = mapped_column(String(50))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    # Admin review. Suspension is separate from verification_status so that
+    # reinstating returns the organisation to whatever it was before.
+    review_reason: Mapped[str | None] = mapped_column(Text)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    suspended_at: Mapped[datetime | None] = mapped_column(DateTime)
+    suspended_reason: Mapped[str | None] = mapped_column(Text)
+
+    @property
+    def admin_status(self) -> str:
+        """pending | verified | rejected | suspended — the Admin console's view."""
+        return "suspended" if self.suspended_at else self.verification_status.value
 
 
 class OrganizerMember(Base):
@@ -273,6 +289,12 @@ class Event(Base):
     resale_enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="1")
     resale_window_open_days: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     resale_window_close_hours: Mapped[int] = mapped_column(Integer, default=2, server_default="2")
+    # Event Approvals (app/services/organiser_service.py): null when no
+    # review was needed, else pending | approved | rejected. A pending or
+    # rejected event stays DRAFT; review_note is the admin's reason.
+    review_state: Mapped[str | None] = mapped_column(String(20))
+    review_note: Mapped[str | None] = mapped_column(Text)
+    submitted_for_review_at: Mapped[datetime | None] = mapped_column(DateTime)
 
     tickets: Mapped[list["Ticket"]] = relationship("Ticket", back_populates="event")
     tiers: Mapped[list["EventTier"]] = relationship(
@@ -730,4 +752,68 @@ class Notification(Base):
         SAEnum(NotificationStatus), default=NotificationStatus.PENDING
     )
     sent_at: Mapped[datetime | None] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+# ─── Platform Admin ──────────────────────────────────────────────────────────
+
+class FeeSchedule(Base):
+    """
+    Platform fees, one row per change (Admin → Fee Configuration). The row
+    in effect at a moment is the latest with effective_from <= that moment,
+    so a change applies going forward only: a sale is always charged at the
+    rates in force when it was paid. No rows means the built-in defaults
+    (app/services/platform_settings.py).
+    """
+    __tablename__ = "fee_schedule"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    platform_fee_percent: Mapped[float] = mapped_column(Float, nullable=False)
+    scanning_fee_kes: Mapped[float] = mapped_column(Float, nullable=False)
+    min_payout_kes: Mapped[float] = mapped_column(Float, nullable=False)
+    seller_escrow_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    organiser_escrow_days: Mapped[int] = mapped_column(Integer, nullable=False)
+    effective_from: Mapped[datetime] = mapped_column(DateTime, nullable=False, index=True)
+    changed_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
+
+
+class FeatureFlag(Base):
+    """A switch an admin flips in Feature Flags. Every key is defined, with
+    its default and what it controls, in app/services/platform_settings.py;
+    a row exists only once an admin has changed it."""
+    __tablename__ = "feature_flags"
+
+    key: Mapped[str] = mapped_column(String(50), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    rollout_percent: Mapped[int] = mapped_column(Integer, nullable=False, default=100)
+    updated_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class Broadcast(Base):
+    """An announcement from Communication Center. Delivered in-app: the
+    site shows it to its audience from scheduled_for (or creation) on."""
+    __tablename__ = "broadcasts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    channels: Mapped[list] = mapped_column(JSON, nullable=False)
+    audience: Mapped[str] = mapped_column(String(20), nullable=False)  # all | attendees | organisers | gate_staff
+    audience_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime)
+    created_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class AdminInvite(Base):
+    """A pending platform-admin invite for a phone number with no account
+    yet. Applied (and deleted) the first time that number signs in —
+    app/services/auth_service.issue_session."""
+    __tablename__ = "admin_invites"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    phone_number: Mapped[str] = mapped_column(String(15), unique=True, nullable=False)
+    name: Mapped[str] = mapped_column(String(100), nullable=False)
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    invited_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))

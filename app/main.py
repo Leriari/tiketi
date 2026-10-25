@@ -1,12 +1,15 @@
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from contextlib import asynccontextmanager
 import redis
+from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
 from app.core.json_response import UTCJSONResponse
-from app.api.routes import auth, events, payments, tickets, gate, resale, dev, organisations, organiser_console, me
+from app.db.session import get_db
+from app.services.platform_settings import flag_on
+from app.api.routes import auth, events, payments, tickets, gate, resale, dev, organisations, organiser_console, me, admin
 
 settings = get_settings()
 
@@ -65,13 +68,15 @@ app.include_router(resale.router,   prefix=PREFIX)
 app.include_router(organisations.router, prefix=PREFIX)
 app.include_router(organiser_console.router, prefix=PREFIX)
 app.include_router(me.router, prefix=PREFIX)
+app.include_router(admin.router, prefix=PREFIX)
+app.include_router(admin.public_router, prefix=PREFIX)
 # Deliberately NOT under PREFIX — /dev/otp-inbox is not part of the
 # versioned public API surface at all (Work Order 04 A5).
 app.include_router(dev.router)
 
 
 @app.get("/", tags=["Health"])
-def health_check():
+def health_check(db: Session = Depends(get_db)):
     return {
         "status": "ok",
         "service": "TiketiKE API",
@@ -81,7 +86,9 @@ def health_check():
         # "demo_numbers" (no SMS — only configured demo numbers have codes).
         "phone_login": "demo_numbers" if settings.OTP_DELIVERY_CHANNEL == "disabled" else "otp",
         "google_phone_confirmation": settings.GOOGLE_PHONE_CONFIRMATION,
-        "simulated_payments": settings.simulated_payments,
+        # Allowed by this server (ALLOW_SIMULATED_PAYMENTS) and not switched
+        # off by an admin (Feature Flags).
+        "simulated_payments": settings.simulated_payments and flag_on(db, "simulated_payments"),
         # Firebase web config — public by design (it identifies the project,
         # it doesn't authorise anything). The login screen uses Firebase for
         # phone codes and Google sign-in only when this is present.
