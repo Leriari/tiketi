@@ -301,6 +301,7 @@ def seed(db, owner_phone: str | None) -> None:
         if owner:
             _ensure_member(db, org, owner)
         orgs[key] = org
+    db.commit()  # memberships, even when every event already exists
 
     created = 0
     for spec in EVENTS:

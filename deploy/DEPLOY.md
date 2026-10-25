@@ -121,6 +121,15 @@ bash deploy/deploy-frontend.sh    # in Git Bash
 
 The site is now live at **https://tiketi-6e9fd.web.app**.
 
+**Google sign-in, once:** the site runs Google's sign-in step on its own
+domain, so it works in Safari on iPhone (frontend/src/lib/firebase.js).
+Google has to allow that. In
+[Google Cloud → Credentials](https://console.cloud.google.com/apis/credentials?project=tiketi-6e9fd),
+open **Web client (auto created by Google Service)**, add
+`https://tiketi-6e9fd.web.app` under *Authorised JavaScript origins* and
+`https://tiketi-6e9fd.web.app/__/auth/handler` under *Authorised redirect
+URIs*, then save.
+
 ## 5. Make yourself platform admin
 
 On the server, after signing in once on the site:

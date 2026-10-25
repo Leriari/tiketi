@@ -7,6 +7,27 @@ import { Input, Button } from "../components/ui";
 import { isValidKenyanPhone, normalizeKenyanPhone } from "../format";
 import { sendPhoneCode, signInWithGoogle, firebaseSignOut, firebaseErrorMessage } from "../lib/firebase";
 import BrandMark from "../components/BrandMark";
+import { inAppBrowserName } from "../lib/inAppBrowser";
+
+/** Shown above "Continue with Google" inside an app's built-in browser. */
+function OpenInBrowserNotice({ app }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setCopied(true);
+    } catch {
+      // No clipboard access: the instructions still work.
+    }
+  }
+  return (
+    <div role="note" className="rounded-md bg-warning-bg text-warning-on-tint px-3 py-2.5 text-body-sm">
+      Google sign-in doesn't work inside {app}'s built-in browser. Open this page in Safari or Chrome
+      (menu <span aria-hidden="true">⋯</span> → <em>Open in browser</em>), or{" "}
+      <button type="button" onClick={copy} className="underline font-semibold">{copied ? "link copied" : "copy the link"}</button>.
+    </div>
+  );
+}
 
 const RESEND_COOLDOWN_SECONDS = 30;
 const RECAPTCHA_ID = "firebase-recaptcha";
@@ -63,6 +84,7 @@ export default function Login() {
   // phone: { linkToken, email }. The phone steps then finish and link.
   const [googleLink, setGoogleLink] = useState(null);
   const [googleError, setGoogleError] = useState(null);
+  const inApp = inAppBrowserName();
 
   useEffect(() => {
     api.health().then((h) => {
@@ -228,6 +250,7 @@ export default function Login() {
 
       {googleFirst && (
         <div className="flex flex-col gap-2 mb-6">
+          {inApp && <OpenInBrowserNotice app={inApp} />}
           <Button type="button" size="lg" iconLeft={<GoogleMark />} onClick={continueWithGoogle} disabled={submitting} loading={submitting}>
             Continue with Google
           </Button>
@@ -275,6 +298,7 @@ export default function Login() {
               <div className="flex items-center gap-3 text-caption text-ink-tertiary">
                 <span className="h-px flex-1 bg-line-subtle" /> or <span className="h-px flex-1 bg-line-subtle" />
               </div>
+              {inApp && <OpenInBrowserNotice app={inApp} />}
               <Button type="button" variant="secondary" size="lg" iconLeft={<GoogleMark />} onClick={continueWithGoogle} disabled={submitting}>
                 Continue with Google
               </Button>
