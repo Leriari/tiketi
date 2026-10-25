@@ -33,7 +33,7 @@ from app.models.models import (
     TicketStatus, Transfer, TransferStatus,
 )
 from app.schemas.schemas import (
-    ComplimentaryTicketRequest, ExportRequest, ManualOverrideRequest, OrganisationProfileUpdate,
+    ComplimentaryTicketRequest, ConsoleScanRequest, ExportRequest, ManualOverrideRequest, OrganisationProfileUpdate,
     PayoutDetailsUpdate,
 )
 from app.services import organiser_service
@@ -702,6 +702,67 @@ def manual_override(
     ))
     db.commit()
     return {"success": True}
+
+
+@router.post("/events/{event_id}/scan")
+def console_scan(
+    organization_id: str,
+    event_id: str,
+    body: ConsoleScanRequest,
+    _m: OrganizerMember = Depends(read_access),
+    db: Session = Depends(get_db),
+):
+    """
+    Check a ticket at the door from Live QR Scanner (a phone's camera or a
+    typed code). Unlike the public /gate/scan it's for this organisation's
+    staff only, rejects tickets for other events, and records every
+    decision as attendance (validate.js's reason codes, plus WRONG_EVENT
+    and NOT_ACTIVE), so it counts in Attendance and Crowd Control.
+    """
+    from app.services.totp_service import verify_otp as totp_verify
+
+    event = _event(db, organization_id, event_id)
+    now = _now()
+    parts = body.qr_payload.strip().split(":")
+    if len(parts) != 3 or parts[0] != "TIKETI":
+        # Any QR the camera happens to catch lands here — not worth a record.
+        return {"valid": False, "code": "INVALID_FORMAT", "reason": "That isn't a ChainTix ticket QR code."}
+    ticket_ref, otp = parts[1], parts[2]
+    ticket = db.query(Ticket).filter(Ticket.id == ticket_ref).first()
+
+    def deny(code: str, reason: str) -> dict:
+        db.add(Attendance(ticket_id=ticket.id if ticket else None, scanned_ref=None if ticket else ticket_ref[:64],
+                          event_id=event.id, scanner_id=None, scan_time=now, status=AttendanceStatus.DENIED,
+                          denial_reason=code))
+        db.commit()
+        return {"valid": False, "code": code, "reason": reason, "ticket_id": ticket.id if ticket else None}
+
+    if not ticket:
+        return deny("UNKNOWN_TICKET", "Ticket not found.")
+    if ticket.event_id != event.id:
+        other = db.get(Event, ticket.event_id)
+        return deny("WRONG_EVENT", f"This ticket is for {other.title if other else 'another event'}.")
+    if not totp_verify(ticket.totp_secret, otp):
+        return deny("BAD_OTP", "This code has expired. Ask them to open the ticket on their phone again.")
+    if ticket.status == TicketStatus.USED:
+        return {**deny("ALREADY_ADMITTED", "Already admitted."), "used_at": _iso(_naive(ticket.used_at))}
+    if ticket.status != TicketStatus.ACTIVE:
+        why = "it's listed for resale" if ticket.status == TicketStatus.RESALE else f"its status is {ticket.status.value}"
+        return deny("NOT_ACTIVE", f"Can't admit this ticket: {why}.")
+
+    ticket.status = TicketStatus.USED
+    ticket.used_at = now
+    db.add(Attendance(ticket_id=ticket.id, event_id=event.id, scanner_id=None, scan_time=now, status=AttendanceStatus.ADMITTED))
+    db.commit()
+    return {
+        "valid": True,
+        "ticket_id": ticket.id,
+        "event_title": event.title,
+        "tier_name": ticket.tier.tier_name if ticket.tier else None,
+        "owner_phone": _mask(ticket.owner.phone_number if ticket.owner else None),
+        "complimentary": bool(ticket.is_complimentary),
+        "scanned_at": _iso(now),
+    }
 
 
 @router.get("/scanners")

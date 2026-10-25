@@ -907,6 +907,9 @@ export const mockApi = {
     return { url, expiresIn: secondsUntilRotation() };
   },
 
+  scanAtEvent: async (eventId, qrPayload) =>
+    mockApi.scanTicket({ qr_payload: qrPayload, event_id: eventId, scanner_id: "organiser-console" }),
+
   scanTicket: async (payload) => {
     await delay(300);
     const record = (ticketId, eventId, result, reason) => {

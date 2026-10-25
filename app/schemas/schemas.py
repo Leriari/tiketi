@@ -651,3 +651,7 @@ class AdminInviteRequest(BaseModel):
 
 class FeatureFlagRollout(BaseModel):
     rollout_percent: int = Field(ge=0, le=100)
+
+
+class ConsoleScanRequest(BaseModel):
+    qr_payload: str = Field(min_length=1, max_length=200)
