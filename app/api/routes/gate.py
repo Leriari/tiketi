@@ -28,13 +28,16 @@ from app.models.models import (
 )
 from app.core.dependencies import get_current_user
 from app.core.authz import check_org_role, get_current_scanner, hash_token, generate_token
+from app.core.config import get_settings
 from app.services.gate_partitioning import assign_gate
+from app.worker import mark_ticket_used_onchain
 from app.schemas.schemas import (
     ScannerRegisterRequest, ScannerRegisterResponse, ScannerEnrollRequest, ScannerEnrollResponse,
     ScanUploadRequest, ScanUploadResultItem,
 )
 
 router = APIRouter(prefix="/gate", tags=["Gate Validation"])
+settings = get_settings()
 
 _ENROLLMENT_CODE_TTL_MINUTES = 15
 
@@ -270,6 +273,7 @@ def upload_scan_batch(
     against an identical prior row from the same scanner.
     """
     results: list[ScanUploadResultItem] = []
+    admitted: list[str] = []
     ids = {item.ticket_id for item in body.scans}
     known = {tid for (tid,) in db.query(Ticket.id).filter(Ticket.id.in_(ids)).all()} if ids else set()
 
@@ -334,6 +338,7 @@ def upload_scan_batch(
                 scan_time=item.scanned_at,
                 status=AttendanceStatus.ADMITTED,
             ))
+            admitted.append(item.ticket_id)
             results.append(ScanUploadResultItem(ticket_id=item.ticket_id, status="recorded"))
 
         else:
@@ -363,4 +368,7 @@ def upload_scan_batch(
             results.append(ScanUploadResultItem(ticket_id=item.ticket_id, status="recorded"))
 
     db.commit()
+    if settings.BLOCKCHAIN_CONFIGURED:
+        for ticket_id in admitted:
+            mark_ticket_used_onchain.delay(ticket_id)
     return results

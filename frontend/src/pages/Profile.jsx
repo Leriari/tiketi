@@ -78,6 +78,60 @@ function RolePanel({ icon: Icon, title, role, to, toLabel, children }) {
   );
 }
 
+/** The account email (receipts go here): shown with a Change link, edited inline. */
+function EmailEditor({ email, verified, onSave }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(email || "");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(null);
+
+  async function save(e) {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      await onSave(value.trim());
+      setEditing(false);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Couldn't save your email.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (!editing) {
+    return (
+      <span className="inline-flex items-center gap-1.5">
+        {email ? <span>{email}</span> : <span className="text-ink-tertiary">No email yet</span>}
+        {email && verified && <Badge tone="verified">Verified</Badge>}
+        <button type="button" onClick={() => { setValue(email || ""); setEditing(true); }} className="text-caption underline text-ink-tertiary hover:text-ink-primary">
+          {email ? "Change" : "Add email"}
+        </button>
+      </span>
+    );
+  }
+  return (
+    <form onSubmit={save} className="flex flex-col gap-1 w-full sm:w-auto">
+      <div className="flex items-center gap-2">
+        <input
+          autoFocus
+          type="email"
+          inputMode="email"
+          autoComplete="email"
+          aria-label="Your email address"
+          value={value}
+          onChange={(e) => setValue(e.target.value)}
+          className="h-9 w-64 max-w-full rounded-md bg-surface-inset border border-brand-primary px-3 text-body-sm text-ink-primary focus:outline-none"
+        />
+        <Button type="submit" size="sm" loading={busy} className="w-auto px-3">Save</Button>
+        <button type="button" onClick={() => setEditing(false)} className="text-caption text-ink-tertiary underline">Cancel</button>
+      </div>
+      {error && <p role="alert" className="text-caption text-danger">{error}</p>}
+      <p className="text-caption text-ink-tertiary">Your ticket receipts are sent here.</p>
+    </form>
+  );
+}
+
 function NameEditor({ name, onSave }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(name || "");
@@ -262,6 +316,13 @@ export default function Profile() {
     toast.push("Name saved.", { tone: "success" });
   }
 
+  async function saveEmail(email) {
+    const next = await api.updateProfile({ email });
+    setData(next);
+    refreshRoles();
+    toast.push("Email saved.", { tone: "success" });
+  }
+
   async function doSignOutEverywhere() {
     setSigningOut(true);
     try {
@@ -301,7 +362,7 @@ export default function Profile() {
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-body-sm text-ink-secondary">
               <span className="tabular-nums">{formatPhone(user.phone_number)}</span>
               {user.phone_verified === false && <Badge tone="warning">Unverified</Badge>}
-              {user.email && <span>{user.email}</span>}
+              <EmailEditor email={user.email} verified={user.email_verified} onSave={saveEmail} />
               {user.member_since && <span className="text-ink-tertiary">Member since {new Date(user.member_since).toLocaleDateString("en-KE", { month: "short", year: "numeric" })}</span>}
             </div>
             <div className="flex flex-wrap gap-1.5 pt-1">

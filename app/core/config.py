@@ -88,6 +88,21 @@ class Settings(BaseSettings):
     # "https://tiketi-6e9fd.web.app". Empty: "*" when DEBUG, otherwise none.
     CORS_ORIGINS: str = ""
 
+    # Outgoing email (purchase receipts, ticket transfers) over SMTP, e.g.
+    # Gmail with an app password: smtp.gmail.com:587. Unset: nothing is sent.
+    SMTP_HOST: str = ""
+    SMTP_PORT: int = 587
+    SMTP_USERNAME: str = ""
+    SMTP_PASSWORD: str = ""
+    EMAIL_FROM: str = ""  # defaults to SMTP_USERNAME
+    EMAIL_FROM_NAME: str = "ChainTix"
+    # Where links in emails point.
+    SITE_URL: str = "http://localhost:5173"
+
+    @property
+    def EMAIL_CONFIGURED(self) -> bool:
+        return bool(self.SMTP_HOST and self.SMTP_USERNAME and self.SMTP_PASSWORD)
+
     # Unit costs for Admin → Platform Costs. Defaults are what the free
     # deployment really pays: free hosting, a testnet, the Daraja sandbox.
     COST_INFRA_MONTHLY_USD: float = 0.0
@@ -123,6 +138,9 @@ class Settings(BaseSettings):
     BLOCKCHAIN_RPC_URL: str = ""
     NFT_CONTRACT_ADDRESS: str = ""
     MINTER_PRIVATE_KEY: str = ""
+    # Block explorer for the chain above — links in ticket pages and emails.
+    BLOCKCHAIN_EXPLORER_URL: str = "https://sepolia.basescan.org"
+    BLOCKCHAIN_NETWORK_NAME: str = "Base Sepolia (testnet)"
 
     @property
     def BLOCKCHAIN_CONFIGURED(self) -> bool:

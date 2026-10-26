@@ -589,7 +589,10 @@ export const mockApi = {
     const listings = db.listings.filter((l) => l.seller_id === userId);
     const wallet = computeWallet(userId);
     return {
-      user: { id: userId, phone_number: user.phone_number, display_name: user.display_name || null, email: null, google_linked: false, member_since: user.created_at || null },
+      user: {
+        id: userId, phone_number: user.phone_number, display_name: user.display_name || null, email: user.email || null,
+        email_verified: false, profile_complete: Boolean(user.display_name && user.email), google_linked: false, member_since: user.created_at || null,
+      },
       security: { sign_in_methods: ["Phone"], last_sign_in: null },
       attendee: {
         tickets_held: held.length,
@@ -607,12 +610,20 @@ export const mockApi = {
     };
   },
 
-  updateProfile: async ({ displayName }) => {
+  updateProfile: async ({ displayName, email }) => {
     const userId = requireUser();
     await delay(250);
-    const name = (displayName || "").trim().replace(/\s+/g, " ");
-    if (!name || name.length > 60) throw new ApiError("Your name must be 1-60 characters.", 422);
-    findUserById(userId).display_name = name;
+    const user = findUserById(userId);
+    if (displayName !== undefined) {
+      const name = (displayName || "").trim().replace(/\s+/g, " ");
+      if (!name || name.length > 60) throw new ApiError("Your name must be 1-60 characters.", 422);
+      user.display_name = name;
+    }
+    if (email !== undefined) {
+      const addr = (email || "").trim().toLowerCase();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(addr)) throw new ApiError("Enter a valid email address, e.g. name@example.com.", 422);
+      user.email = addr;
+    }
     save();
     return mockApi.getProfile();
   },
@@ -651,7 +662,7 @@ export const mockApi = {
     const id = requireUser();
     const user = findUserById(id);
     if (!user) throw new ApiError("User not found", 401);
-    return { id: user.id, phone_number: user.phone_number, display_name: null, email: null, wallet_address: null, created_at: new Date().toISOString() };
+    return { id: user.id, phone_number: user.phone_number, display_name: user.display_name || null, email: user.email || null, wallet_address: null, created_at: new Date().toISOString() };
   },
 
   listEvents: async () => {
@@ -831,6 +842,13 @@ export const mockApi = {
         event_id: t.event_id,
         owner_id: t.owner_id,
         status: t.status,
+        ...(() => {
+          const ev = db.events.find((e) => e.id === t.event_id);
+          return {
+            event_title: ev?.title, event_date: ev?.event_date, venue: ev?.venue, category: ev?.category,
+            image_data_url: ev?.image_data_url, tier_name: ev?.tiers.find((x) => x.id === t.tier_id)?.name,
+          };
+        })(),
         seat_number: t.seat_number,
         nft_token_id: t.nft_token_id ?? null,
         purchased_at: t.purchased_at,
@@ -859,6 +877,14 @@ export const mockApi = {
       seat_number: ticket.seat_number,
       gate_assignment: ticket.gate_assignment || null,
       chain_status: ticket.chain_status || "pending",
+      admitted_at: ticket.used_at || null,
+      payment: null,
+      receipt_email: null,
+      chain: {
+        network: "Simulated (mock backend)", contract_address: null, contract_url: null,
+        token_id: ticket.nft_token_id ?? null, token_url: null,
+        mint_tx_hash: ticket.nft_tx_hash ?? null, mint_tx_url: null, used_tx_hash: null, used_tx_url: null,
+      },
       nft_token_id: ticket.nft_token_id ?? null,
       nft_tx_hash: ticket.nft_tx_hash ?? null,
       self_custodied: Boolean(ticket.self_custodied),
@@ -1034,6 +1060,17 @@ export const mockApi = {
   },
 
   // ── Mock-only: no backend endpoint yet (Phase 6 resale / Organiser Console) ──
+
+  verifyTicketOnchain: async () => {
+    requireUser();
+    await delay(400);
+    throw new ApiError("The mock backend has no blockchain to check against. Run against the real backend.", 503);
+  },
+
+  resendReceipt: async () => {
+    requireUser();
+    throw new ApiError("Email isn't set up in the mock backend.", 503);
+  },
 
   transferTicket: async (ticketId, { recipient }) => {
     const userId = requireUser();

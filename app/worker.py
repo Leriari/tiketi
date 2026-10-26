@@ -33,6 +33,7 @@ celery_app.conf.update(
     task_routes={
         "app.worker.mint_ticket_nft": {"queue": "blockchain"},
         "app.worker.settle_resale_transfer": {"queue": "blockchain"},
+        "app.worker.mark_ticket_used_onchain": {"queue": "blockchain"},
     },
 )
 
@@ -222,5 +223,167 @@ def settle_resale_transfer(self, transfer_id: str):
         db.commit()
         logger.info(f"Settled resale transfer={transfer_id}: tx={tx_hash}, new owner={transfer.buyer_id}")
         return {"status": "completed", "transfer_id": transfer_id, "tx_hash": tx_hash}
+    finally:
+        db.close()
+
+
+# ── Admission on-chain ──────────────────────────────────────────────────────
+
+@celery_app.task(
+    name="app.worker.mark_ticket_used_onchain",
+    bind=True,
+    max_retries=10,
+    default_retry_delay=60,
+)
+def mark_ticket_used_onchain(self, ticket_id: str):
+    """
+    Record an admission on-chain (TiketiNFT.markUsed), after the gate has
+    already let the person in — the gate never waits for a chain. Queued by
+    every admission path (console scan, manual override, offline upload —
+    the last doesn't change Ticket.status). Retries while the mint is in flight.
+    """
+    from app.db.session import SessionLocal
+    from app.models.models import Ticket
+    from app.services import web3_service
+
+    if not settings.BLOCKCHAIN_CONFIGURED:
+        return {"status": "skipped", "reason": "not_configured", "ticket_id": ticket_id}
+
+    db = SessionLocal()
+    try:
+        ticket = db.query(Ticket).filter(Ticket.id == ticket_id).first()
+        if not ticket or ticket.used_tx_hash:
+            return {"status": "skipped", "ticket_id": ticket_id}
+        if not ticket.nft_token_id:
+            raise self.retry()  # not minted yet
+        try:
+            tx_hash = web3_service.mark_used_onchain(ticket.nft_token_id)
+        except web3_service.ContractRevertError as exc:
+            if "already used" in str(exc):
+                return {"status": "already_used", "ticket_id": ticket_id}
+            raise
+        except Exception as exc:
+            logger.error(f"mark_ticket_used_onchain failed for ticket={ticket_id}: {exc}")
+            raise self.retry(exc=exc)
+        ticket.used_tx_hash = tx_hash
+        db.commit()
+        return {"status": "marked", "ticket_id": ticket_id, "tx_hash": tx_hash}
+    finally:
+        db.close()
+
+
+# ── Email ───────────────────────────────────────────────────────────────────
+
+def _already_sent(db, reference: str, kind: str) -> bool:
+    from app.models.models import Notification, NotificationStatus
+    return db.query(Notification.id).filter(
+        Notification.reference == reference, Notification.notification_type == kind,
+        Notification.status == NotificationStatus.SENT,
+    ).first() is not None
+
+
+def _deliver(task, db, *, user, kind: str, reference: str, subject: str, text: str, body: str):
+    """Send one email and record it; retries the task on SMTP failure."""
+    from datetime import datetime as _dt
+    from app.models.models import Notification, NotificationStatus
+    from app.services import email_service
+
+    try:
+        email_service.send_email(user.email, subject, text, body)
+    except Exception as exc:
+        if task.request.retries >= task.max_retries:
+            db.add(Notification(recipient_id=user.id, notification_type=kind, channel="email",
+                                status=NotificationStatus.FAILED, reference=reference))
+            db.commit()
+        logger.error(f"{kind} email for {reference} failed: {exc}")
+        raise task.retry(exc=exc)
+    db.add(Notification(recipient_id=user.id, notification_type=kind, channel="email",
+                        status=NotificationStatus.SENT, sent_at=_dt.utcnow(), reference=reference))
+    db.commit()
+
+
+def _local_phone(phone: str | None) -> str:
+    return "0" + phone[3:] if phone and phone.startswith("254") else (phone or "")
+
+
+@celery_app.task(name="app.worker.send_payment_receipt", bind=True, max_retries=5, default_retry_delay=120)
+def send_payment_receipt(self, payment_id: str, force: bool = False):
+    """Email the buyer a receipt for a confirmed payment — a primary
+    purchase or a resale one. Once per payment unless forced (the buyer
+    asking for it again)."""
+    from app.db.session import SessionLocal
+    from app.models.models import Payment, PaymentStatus, Ticket, Transfer
+    from app.services import email_service
+
+    if not settings.EMAIL_CONFIGURED:
+        return {"status": "skipped", "reason": "email_not_configured"}
+    db = SessionLocal()
+    try:
+        payment = db.query(Payment).filter(Payment.id == payment_id).first()
+        if not payment or payment.status != PaymentStatus.SUCCESS:
+            return {"status": "skipped", "reason": "not_paid"}
+        user = payment.user
+        if not user or not user.email:
+            return {"status": "skipped", "reason": "no_email"}
+        if not force and _already_sent(db, payment.id, "payment_receipt"):
+            return {"status": "skipped", "reason": "already_sent"}
+
+        transfer = db.query(Transfer).filter(Transfer.payment_id == payment.id).first()
+        ticket = transfer.ticket if transfer else db.query(Ticket).filter(Ticket.id == payment.ticket_id).first()
+        event = ticket.event if ticket else None
+        tier = payment.tier or (ticket.tier if ticket else None)
+        subject, text, body = email_service.purchase_receipt(
+            name=user.display_name,
+            order_ref=payment.id[:8].upper(),
+            event_title=event.title if event else "your event",
+            event_date=event.event_date if event else None,
+            venue=event.venue if event else "",
+            tier_name=tier.tier_name if tier else "General",
+            quantity=1 if transfer else (payment.quantity or 1),
+            amount_kes=payment.amount_kes,
+            mpesa_receipt=payment.mpesa_receipt_number,
+            paid_at=payment.confirmed_at,
+            phone=_local_phone(payment.phone_number or user.phone_number),
+            resale=bool(transfer),
+            tickets_url=f"{settings.SITE_URL.rstrip('/')}/tickets",
+        )
+        _deliver(self, db, user=user, kind="payment_receipt", reference=payment.id, subject=subject, text=text, body=body)
+        return {"status": "sent", "payment_id": payment_id}
+    finally:
+        db.close()
+
+
+@celery_app.task(name="app.worker.send_transfer_notice", bind=True, max_retries=5, default_retry_delay=120)
+def send_transfer_notice(self, audit_log_id: str):
+    """Tell the recipient of a gifted ticket that it's in their account.
+    audit_log_id: the ticket_transferred entry (app/api/routes/tickets.py)."""
+    from app.db.session import SessionLocal
+    from app.models.models import AuditLog, Ticket, User
+    from app.services import email_service
+
+    if not settings.EMAIL_CONFIGURED:
+        return {"status": "skipped", "reason": "email_not_configured"}
+    db = SessionLocal()
+    try:
+        log = db.query(AuditLog).filter(AuditLog.id == audit_log_id, AuditLog.action_type == "ticket_transferred").first()
+        if not log or not (log.details or "").startswith("to="):
+            return {"status": "skipped", "reason": "not_found"}
+        recipient = db.query(User).filter(User.id == log.details[3:]).first()
+        sender = db.query(User).filter(User.id == log.actor_id).first()
+        ticket = db.query(Ticket).filter(Ticket.id == log.target_id).first()
+        if not recipient or not recipient.email or not ticket:
+            return {"status": "skipped", "reason": "no_email"}
+        if _already_sent(db, log.id, "ticket_transfer"):
+            return {"status": "skipped", "reason": "already_sent"}
+        event = ticket.event
+        subject, text, body = email_service.transfer_notice(
+            recipient_name=recipient.display_name,
+            sender_name=(sender.display_name if sender and sender.display_name else "A ChainTix user"),
+            event_title=event.title, event_date=event.event_date, venue=event.venue,
+            tier_name=ticket.tier.tier_name if ticket.tier else "General",
+            tickets_url=f"{settings.SITE_URL.rstrip('/')}/tickets",
+        )
+        _deliver(self, db, user=recipient, kind="ticket_transfer", reference=log.id, subject=subject, text=text, body=body)
+        return {"status": "sent", "audit_log_id": audit_log_id}
     finally:
         db.close()

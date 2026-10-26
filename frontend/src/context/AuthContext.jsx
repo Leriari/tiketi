@@ -10,7 +10,9 @@ const AuthContext = createContext(null);
 // on simulated data there — see C4), so guards pass through unrestricted
 // when usingMockBackend is true rather than permanently locking users out
 // of the one demo mode this app actually ships with by default.
-const EMPTY_ROLES = { organisations: [], isPlatformAdmin: false, googleLinked: false, email: null, displayName: null };
+// profileKnown: the account's name/email were actually loaded (not a failed
+// or skipped load), so "missing" can be trusted — see ProfileGate in App.jsx.
+const EMPTY_ROLES = { organisations: [], isPlatformAdmin: false, googleLinked: false, email: null, displayName: null, profileKnown: false };
 
 // A stored token that can't possibly work against the current backend: a
 // mock-mode token ("mock.<id>") after switching VITE_USE_MOCK off (or a real
@@ -70,6 +72,7 @@ export function AuthProvider({ children }) {
         googleLinked: Boolean(me.google_linked),
         email: me.email || null,
         displayName: me.display_name || null,
+        profileKnown: true,
       });
       // Keep the stored organisation if this user still belongs to it,
       // otherwise fall back to their first one.

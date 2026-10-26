@@ -66,7 +66,7 @@ export default function AuditLookup() {
                 <span className="text-caption text-ink-tertiary tabular-nums">
                   {new Date(step.at).toLocaleString("en-KE", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}
                 </span>
-                <span className="text-caption text-ink-tertiary">· {r.holder_phone_masked}</span>
+                <span className="text-caption text-ink-tertiary">· {r.holder_name ? `${r.holder_name}, ` : ""}{r.holder_phone_masked}</span>
                 {step.tx_hash && <span className="text-caption text-ink-tertiary font-mono truncate">{step.tx_hash.slice(0, 14)}…</span>}
               </div>
             ))}

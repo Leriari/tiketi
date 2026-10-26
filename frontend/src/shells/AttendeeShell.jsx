@@ -93,9 +93,14 @@ export default function AttendeeShell() {
                   items={userMenuItems}
                 />
               ) : (
-                <Button size="sm" iconLeft={<LogIn size={14} />} onClick={() => navigate(loginHref)}>
-                  Log in
-                </Button>
+                <div className="flex items-center gap-2">
+                  <Button size="sm" variant="ghost" onClick={() => navigate(loginHref.replace("/login", "/signup"))} className="hidden sm:inline-flex w-auto">
+                    Sign up
+                  </Button>
+                  <Button size="sm" iconLeft={<LogIn size={14} />} onClick={() => navigate(loginHref)}>
+                    Log in
+                  </Button>
+                </div>
               )}
             </div>
           </div>

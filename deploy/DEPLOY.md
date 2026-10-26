@@ -130,6 +130,27 @@ open **Web client (auto created by Google Service)**, add
 `https://tiketi-6e9fd.web.app/__/auth/handler` under *Authorised redirect
 URIs*, then save.
 
+## Receipt emails (Gmail)
+
+Receipts go out from a Gmail account using an **app password**: a separate
+16-character password for one app, which you can revoke anytime. Your real
+Gmail password is never used.
+
+1. The Google account needs 2-Step Verification on
+   (https://myaccount.google.com/signinoptions/twosv).
+2. Create the app password at https://myaccount.google.com/apppasswords.
+   Name it "ChainTix" and copy the 16 characters it shows.
+3. In `deploy/.env.production` on your PC, fill in:
+   ```
+   SMTP_USERNAME=you@gmail.com
+   SMTP_PASSWORD=abcdabcdabcdabcd    # the app password, without spaces
+   ```
+4. Copy the file to the server again (step 3's `scp`), then on the server:
+   `cd ~/tiketi/deploy && ./up.sh`.
+
+Gmail allows about 500 emails a day. Leave `SMTP_PASSWORD` empty and the
+site simply doesn't send email.
+
 ## 5. Make yourself platform admin
 
 On the server, after signing in once on the site:

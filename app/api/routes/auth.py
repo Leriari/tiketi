@@ -131,6 +131,8 @@ def _link_google_account(db: Session, user: User, google_sub: str, email: str | 
     user.google_sub = google_sub
     if email and not user.email and not db.query(User).filter(User.email == email).first():
         user.email = email
+    if email and user.email and user.email.lower() == email.lower():
+        user.email_verified = True  # Google confirmed this address
 
 
 def _session(db: Session, user: User, method: str, request: Request) -> AuthExchangeResponse:

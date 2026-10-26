@@ -241,3 +241,55 @@ def settle_custodial_resale_onchain(token_id: int) -> str:
     except ContractLogicError as e:
         raise ContractRevertError(_revert_message(e)) from e
     return receipt["transactionHash"].hex()
+
+
+def custodian_address() -> str:
+    """The platform wallet that holds every unclaimed ticket NFT (it mints them)."""
+    _require_configured()
+    return Account.from_key(settings.MINTER_PRIVATE_KEY).address
+
+
+def read_ticket_onchain(token_id: int, mint_tx_hash: str | None = None) -> dict:
+    """
+    Read a ticket straight from the contract — no database involved — so a
+    holder can check ChainTix's records against the chain itself. Raises
+    ContractRevertError if the token doesn't exist.
+    """
+    _require_configured()
+    w3 = _get_web3()
+    contract = _get_contract()
+    try:
+        owner = contract.functions.ownerOf(int(token_id)).call()
+        event_ref, tier_ref, face_price_kes, resale_cap_bps, used, claimed = contract.functions.ticketMeta(int(token_id)).call()
+        listed_price_kes = contract.functions.listingPriceKes(int(token_id)).call()
+        _, royalty = contract.functions.royaltyInfo(int(token_id), 10_000).call()
+    except ContractLogicError as exc:
+        raise ContractRevertError(_revert_message(exc)) from exc
+
+    minted_block = minted_at = None
+    if mint_tx_hash:
+        try:
+            receipt = w3.eth.get_transaction_receipt(mint_tx_hash)
+            minted_block = receipt["blockNumber"]
+            minted_at = w3.eth.get_block(minted_block)["timestamp"]
+        except Exception:  # an RPC node that's pruned or lagging: the rest still stands
+            logger.warning(f"Couldn't fetch mint receipt {mint_tx_hash}", exc_info=True)
+
+    return {
+        "owner": owner,
+        "event_ref": event_ref,
+        "tier_ref": tier_ref,
+        "face_price_kes": face_price_kes,
+        "resale_cap_bps": resale_cap_bps,
+        "royalty_bps": royalty,
+        "used": used,
+        "claimed": claimed,
+        "listed_price_kes": listed_price_kes,
+        "minted_block": minted_block,
+        "minted_at": minted_at,
+    }
+
+
+def chain_ref(value: str) -> int:
+    """The uint256 an off-chain id is recorded as on-chain (see _uuid_to_uint256)."""
+    return _uuid_to_uint256(value)

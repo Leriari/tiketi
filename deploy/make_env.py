@@ -89,6 +89,14 @@ def main():
         ("BLOCKCHAIN_RPC_URL", keep("BLOCKCHAIN_RPC_URL")),
         ("NFT_CONTRACT_ADDRESS", keep("NFT_CONTRACT_ADDRESS")),
         ("MINTER_PRIVATE_KEY", keep("MINTER_PRIVATE_KEY")),
+        ("", None),
+        ("# Receipt emails over SMTP — Gmail: smtp.gmail.com with an app password", None),
+        ("# (DEPLOY.md). Leave SMTP_PASSWORD empty and no email is sent.", None),
+        ("SMTP_HOST", keep("SMTP_HOST", "smtp.gmail.com")),
+        ("SMTP_PORT", keep("SMTP_PORT", "587")),
+        ("SMTP_USERNAME", keep("SMTP_USERNAME")),
+        ("SMTP_PASSWORD", keep("SMTP_PASSWORD")),
+        ("SITE_URL", FIREBASE_SITE.split(",")[0]),
     ]
     lines = [k if v is None else f"{k}={v}" for k, v in values]
     OUT.write_text("\n".join(lines) + "\n", encoding="utf-8")

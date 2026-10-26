@@ -179,7 +179,9 @@ export const liveApi = {
 
   // The signed-in user's own account (app/api/routes/me.py).
   getProfile: () => request("/me/profile"),
-  updateProfile: ({ displayName }) => request("/me/profile", { method: "PATCH", body: { display_name: displayName } }),
+  // Either or both: { displayName, email }.
+  updateProfile: ({ displayName, email }) =>
+    request("/me/profile", { method: "PATCH", body: { display_name: displayName, email } }),
   getActivity: ({ before, category, limit } = {}) => request(`/me/activity${query({ before, category, limit })}`),
   // Ends every other session; returns a fresh token for this device.
   signOutEverywhere: () => request("/me/sign-out-everywhere", { method: "POST" }),
@@ -218,7 +220,11 @@ export const liveApi = {
   // they'll eventually need to do.
   getOrganiserDashboard: notImplemented("getOrganiserDashboard"),
   getTicketDetail: (ticketId) => request(`/tickets/${ticketId}/detail`),
-  transferTicket: notImplemented("transferTicket"),
+  // Reads the ticket back from the contract and checks it against ChainTix's records.
+  verifyTicketOnchain: (ticketId) => request(`/tickets/${ticketId}/onchain`),
+  transferTicket: (ticketId, { recipient }) =>
+    request(`/tickets/${ticketId}/transfer`, { method: "POST", body: { recipient } }),
+  resendReceipt: (ticketId) => request(`/tickets/${ticketId}/receipt`, { method: "POST" }),
   claimTicketToWallet: notImplemented("claimTicketToWallet"),
 
   // Seller Portal (spec.md §4) — wired to the real resale backend

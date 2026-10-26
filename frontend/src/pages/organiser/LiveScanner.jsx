@@ -130,7 +130,7 @@ export default function LiveScanner() {
             <div key={i} className={`flex items-center justify-between gap-3 px-4 py-2.5 ${i > 0 ? "border-t border-line-subtle" : ""}`}>
               <div className="min-w-0">
                 <p className={r.valid ? "text-success text-body-sm font-semibold" : "text-danger text-body-sm font-semibold"}>
-                  {r.valid ? `Admitted${r.tier_name ? ` · ${r.tier_name}` : ""}` : "Denied"}
+                  {r.valid ? `Admitted${r.tier_name ? ` · ${r.tier_name}` : ""}${r.holder_name ? ` · ${r.holder_name}` : ""}` : "Denied"}
                 </p>
                 {!r.valid && <p className="text-caption text-ink-tertiary truncate">{r.reason}</p>}
               </div>
@@ -151,9 +151,12 @@ export default function LiveScanner() {
           {result.valid ? <CheckCircle2 size={88} className="text-white" /> : <XCircle size={88} className="text-white" />}
           <h2 className="text-display text-white font-bold">{result.valid ? "ACCESS GRANTED" : "ACCESS DENIED"}</h2>
           {result.valid ? (
-            <p className="text-h3 text-white/90">
-              {result.tier_name || "General"}{result.complimentary ? " · complimentary" : ""} · {result.owner_phone}
-            </p>
+            <>
+              {result.holder_name && <p className="text-h2 text-white font-semibold">{result.holder_name}</p>}
+              <p className="text-h3 text-white/90">
+                {result.tier_name || "General"}{result.complimentary ? " · complimentary" : ""} · {result.owner_phone}
+              </p>
+            </>
           ) : (
             <>
               <p className="text-h3 text-white font-semibold">
