@@ -669,11 +669,9 @@ class GateScanner(Base):
 class Attendance(Base):
     """A single scan attempt at the gate, admitted or denied. Wired via
     POST /gate/scan-upload (Work Order 05 B5) — the offline scanner's
-    reconciliation endpoint, written once connectivity returns. /gate/scan
-    (the real-time cloud path) still mutates Ticket.status/used_at
-    directly and does not write here; this table is specifically the
-    offline device's own record of what it decided, for reconciliation
-    and the evaluation metrics in Chapter 5."""
+    reconciliation endpoint, written once connectivity returns — and by
+    the Organiser Console's Live QR Scanner, which checks online and
+    records each decision as it makes it."""
     __tablename__ = "attendances"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))

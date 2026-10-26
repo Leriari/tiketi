@@ -211,7 +211,6 @@ export const liveApi = {
     return { url: URL.createObjectURL(blob), expiresIn };
   },
 
-  scanTicket: (payload) => request("/gate/scan", { method: "POST", body: payload, auth: false }),
   // Live QR Scanner in the Organiser Console: staff-only, checked against this event, recorded as attendance.
   scanAtEvent: (eventId, qrPayload) => orgRequest(`/events/${eventId}/scan`, { method: "POST", body: { qr_payload: qrPayload } }),
 
