@@ -714,8 +714,8 @@ def console_scan(
 ):
     """
     Check a ticket at the door from Live QR Scanner (a phone's camera or a
-    typed code). Unlike the public /gate/scan it's for this organisation's
-    staff only, rejects tickets for other events, and records every
+    typed code). For this organisation's staff only; rejects tickets for
+    other events, and records every
     decision as attendance (validate.js's reason codes, plus WRONG_EVENT
     and NOT_ACTIVE), so it counts in Attendance and Crowd Control.
     """

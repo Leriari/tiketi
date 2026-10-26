@@ -185,7 +185,7 @@ def test_purchase_invalid_event(auth_headers):
 
 # ── Simulate Full M-Pesa Flow ──────────────────────────────────────────────────
 
-def test_full_mpesa_flow(auth_headers, test_event, monkeypatch):
+def test_full_mpesa_flow(auth_headers, test_org, test_event, monkeypatch):
     """
     Simulate the full purchase flow by mocking the M-Pesa STK push
     and manually firing the callback.
@@ -276,10 +276,9 @@ def test_full_mpesa_flow(auth_headers, test_event, monkeypatch):
     from app.services.totp_service import build_qr_payload
     qr_payload = build_qr_payload(ticket_id, seed_data["totp_secret"])
 
-    res = client.post("/api/v1/gate/scan", json={
-        "qr_payload": qr_payload,
-        "scanner_id": "bouncer-device-001",
-    })
+    scan_url = f"/api/v1/organisations/{test_org['id']}/events/{test_event['id']}/scan"
+    assert client.post(scan_url, json={"qr_payload": qr_payload}).status_code in (401, 403)  # staff only
+    res = client.post(scan_url, json={"qr_payload": qr_payload}, headers=auth_headers)
     assert res.status_code == 200
     scan = res.json()
     assert scan["valid"] is True
@@ -287,13 +286,10 @@ def test_full_mpesa_flow(auth_headers, test_event, monkeypatch):
 
     # 9. Try scanning the same ticket again — should be rejected
     qr_payload_2 = build_qr_payload(ticket_id, seed_data["totp_secret"])
-    res = client.post("/api/v1/gate/scan", json={
-        "qr_payload": qr_payload_2,
-        "scanner_id": "bouncer-device-002",
-    })
+    res = client.post(scan_url, json={"qr_payload": qr_payload_2}, headers=auth_headers)
     scan2 = res.json()
     assert scan2["valid"] is False
-    assert "Already used" in scan2["reason"]
+    assert scan2["code"] == "ALREADY_ADMITTED"
 
 
 # ── Multi-ticket / repeat purchase ──────────────────────────────────────────────

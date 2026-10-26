@@ -19,7 +19,6 @@ import secrets
 import uuid
 from datetime import datetime, timezone, timedelta
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -40,74 +39,11 @@ router = APIRouter(prefix="/gate", tags=["Gate Validation"])
 _ENROLLMENT_CODE_TTL_MINUTES = 15
 
 
-class ScanRequest(BaseModel):
-    qr_payload: str    # Raw string decoded from QR scan
-    scanner_id: str    # Bouncer device ID
-
-
-class ScanResult(BaseModel):
-    valid: bool
-    ticket_id: str | None = None
-    event_title: str | None = None
-    owner_phone: str | None = None
-    reason: str | None = None
-    scanned_at: str | None = None
-
-
-@router.post("/scan", response_model=ScanResult)
-def scan_ticket(body: ScanRequest, db: Session = Depends(get_db)):
-    """
-    Validate a scanned QR code.
-    Returns a clear VALID / INVALID result for the bouncer app to display.
-    Unchanged by Work Order 04 — this is the public cloud endpoint, no
-    auth by design, untouched so the existing attendee journey keeps
-    working exactly as before.
-    """
-    # ── 1. Parse QR payload ──────────────────────────────────────────────────
-    parts = body.qr_payload.split(":")
-    if len(parts) != 3 or parts[0] != "TIKETI":
-        return ScanResult(valid=False, reason="Invalid QR format")
-
-    ticket_id = parts[1]
-    scanned_otp = parts[2]
-
-    # ── 2. Look up ticket in local DB ────────────────────────────────────────
-    ticket = db.query(Ticket).filter(Ticket.id == ticket_id).first()
-    if not ticket:
-        return ScanResult(valid=False, ticket_id=ticket_id, reason="Ticket not found")
-
-    # ── 3. Validate OTP using the ticket's stored secret ─────────────────────
-    from app.services.totp_service import verify_otp as totp_verify
-    if not totp_verify(ticket.totp_secret, scanned_otp):
-        return ScanResult(valid=False, ticket_id=ticket_id, reason="QR code expired or invalid")
-
-    # ── 4. Check ticket status ───────────────────────────────────────────────
-    if ticket.status == TicketStatus.USED:
-        return ScanResult(
-            valid=False,
-            ticket_id=ticket_id,
-            reason=f"Already used at {ticket.used_at.strftime('%H:%M:%S') if ticket.used_at else 'unknown time'}",
-        )
-
-    if ticket.status != TicketStatus.ACTIVE:
-        return ScanResult(
-            valid=False,
-            ticket_id=ticket_id,
-            reason=f"Ticket status: {ticket.status.value}",
-        )
-
-    # ── 5. Mark as USED ──────────────────────────────────────────────────────
-    ticket.status = TicketStatus.USED
-    ticket.used_at = datetime.now(timezone.utc)
-    db.commit()
-
-    return ScanResult(
-        valid=True,
-        ticket_id=ticket_id,
-        event_title=ticket.event.title,
-        owner_phone=ticket.owner.phone_number[-4:].rjust(len(ticket.owner.phone_number), "*"),
-        scanned_at=ticket.used_at.strftime("%H:%M:%S"),
-    )
+# Scanning: there is deliberately no public "mark this ticket used" endpoint.
+# Staff scan online from the Organiser Console (POST /organisations/{org}/
+# events/{event}/scan — signed in, checked against the event, recorded as
+# attendance); enrolled devices validate offline and report through
+# /gate/scan-upload (device token).
 
 
 # ─── Scanner device registration / enrolment (Work Order 04 B4) ────────────
