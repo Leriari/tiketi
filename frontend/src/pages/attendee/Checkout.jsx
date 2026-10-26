@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { useNavigate, useParams, useSearchParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { Smartphone, RotateCcw, Minus, Plus, Zap } from "lucide-react";
 import { api, ApiError } from "../../api";
 import { useAuth } from "../../context/AuthContext";
@@ -22,7 +22,7 @@ export default function Checkout() {
   const [params] = useSearchParams();
   const tierId = params.get("tier");
   const navigate = useNavigate();
-  const { user } = useAuth();
+  const { user, roles } = useAuth();
 
   const { data: event, error: eventError, retry: retryEvent } = useApiData(() => api.getEvent(eventId), [eventId]);
   // Pre-filled from the already-logged-in user (Work Order 05 A2 — identity
@@ -225,6 +225,13 @@ export default function Checkout() {
           error={phoneError}
           required
         />
+        {(roles.displayName || roles.email) && (
+          <p className="text-caption text-ink-tertiary -mt-1">
+            {roles.displayName ? <>Tickets in the name of <span className="text-ink-secondary font-medium">{roles.displayName}</span>. </> : null}
+            {roles.email ? <>Receipt to <span className="text-ink-secondary font-medium">{roles.email}</span>. </> : null}
+            <Link to="/profile" className="underline">Change</Link>
+          </p>
+        )}
         <Checkbox
           checked={agreed}
           onChange={setAgreed}

@@ -93,7 +93,7 @@ export default function TicketCentral() {
           { key: "ticket_id", header: "Ticket ID", render: (r) => <span className="font-mono text-caption">{r.ticket_id.slice(0, 8)}</span> },
           { key: "event_title", header: "Event" },
           { key: "tier_name", header: "Tier" },
-          { key: "holder_phone_masked", header: "Holder" },
+          { key: "holder_phone_masked", header: "Holder", render: (r) => (r.holder_name ? <span>{r.holder_name} <span className="text-ink-tertiary">· {r.holder_phone_masked}</span></span> : r.holder_phone_masked) },
           { key: "status", header: "Status", render: (r) => <Badge tone={STATUS_TONE[r.status] || "neutral"}>{r.status}</Badge> },
           { key: "purchased_at", header: "Purchased", render: (r) => (r.purchased_at ? <span className="tabular-nums">{new Date(r.purchased_at).toLocaleDateString("en-KE", { day: "2-digit", month: "short" })}</span> : "—") },
           { key: "nft_token_id", header: "Token ID", render: (r) => (r.nft_token_id ? <span className="tabular-nums">#{r.nft_token_id}</span> : <span className="text-ink-tertiary">Minting…</span>) },

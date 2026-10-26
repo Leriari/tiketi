@@ -2,10 +2,12 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-route
 import ScrollToTop from "./ScrollToTop";
 import AuthErrorToast from "./AuthErrorToast";
 import { RequireAuth, RequireOrgMembership, RequirePlatformAdmin, RequireDeviceToken } from "./routeGuards";
-import { AuthProvider } from "./context/AuthContext";
+import { AuthProvider, useAuth } from "./context/AuthContext";
+import { usingMockBackend } from "./api";
 import { ToastProvider } from "./components/ui/Toast";
 import { ThemeProvider } from "./theme/ThemeProvider";
 import Login from "./pages/Login";
+import Welcome from "./pages/Welcome";
 import AttendeeShell from "./shells/AttendeeShell";
 import Landing from "./pages/attendee/Landing";
 import Browse from "./pages/attendee/Browse";
@@ -76,6 +78,24 @@ import ComponentsShowcase from "./pages/dev/ComponentsShowcase";
 // next. Each surface owns
 // its own ThemeProvider default inside its shell (Attendee/Seller = dark)
 // rather than one global provider, since surfaces disagree on default theme.
+// Pages a signed-in person without a name or email can still reach: the
+// sign-in screens themselves, and the gate scanner (a device, not a person).
+const PROFILE_EXEMPT = ["/welcome", "/login", "/signup", "/scanner", "/dev/"];
+
+/**
+ * Sends a signed-in account that has no name or email yet to the one-time
+ * Welcome step, then back to where it was going. Only once the profile has
+ * really loaded (roles.profileKnown), so a network blip never triggers it.
+ */
+function ProfileGate() {
+  const { isAuthed, rolesLoaded, roles } = useAuth();
+  const { pathname, search } = useLocation();
+  if (usingMockBackend || !isAuthed || !rolesLoaded || !roles.profileKnown) return null;
+  if (roles.displayName && roles.email) return null;
+  if (PROFILE_EXEMPT.some((p) => pathname.startsWith(p))) return null;
+  return <Navigate to={`/welcome?return=${encodeURIComponent(pathname + search)}`} replace />;
+}
+
 function OrganizerSpellingRedirect() {
   const { pathname, search } = useLocation();
   return <Navigate to={pathname.replace(/^\/organizer/, "/organiser") + search} replace />;
@@ -88,6 +108,7 @@ export default function App() {
       <ToastProvider>
         <AuthProvider>
           <AuthErrorToast />
+          <ProfileGate />
           <Routes>
             <Route
               path="/dev/components"
@@ -103,6 +124,22 @@ export default function App() {
               element={
                 <ThemeProvider surfaceDefault="dark">
                   <Login />
+                </ThemeProvider>
+              }
+            />
+            <Route
+              path="/signup"
+              element={
+                <ThemeProvider surfaceDefault="dark">
+                  <Login mode="signup" key="signup" />
+                </ThemeProvider>
+              }
+            />
+            <Route
+              path="/welcome"
+              element={
+                <ThemeProvider surfaceDefault="dark">
+                  <Welcome />
                 </ThemeProvider>
               }
             />

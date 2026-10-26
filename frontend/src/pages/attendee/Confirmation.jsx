@@ -1,13 +1,12 @@
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { CheckCircle2, CalendarPlus } from "lucide-react";
+import { CheckCircle2, Mail } from "lucide-react";
 import { api } from "../../api";
 import { Card, Button, ChainBadge, Skeleton } from "../../components/ui";
 import { formatEventDate } from "../../format";
 import { markFirstPurchase } from "../../components/InstallPrompt";
 import EventCover from "../../components/EventCover";
-
-const BASESCAN_BASE = "https://sepolia.basescan.org/tx/";
+import AddToCalendar from "../../components/AddToCalendar";
 
 export default function Confirmation() {
   const { ticketId } = useParams();
@@ -23,7 +22,7 @@ export default function Confirmation() {
       const d = await api.getTicketDetail(ticketId);
       if (stop) return;
       setDetail(d);
-      if (d.chain_status !== "verified") setTimeout(poll, 1000);
+      if (d.chain_status !== "verified") setTimeout(poll, 2000);
     }
     poll();
     return () => {
@@ -61,23 +60,23 @@ export default function Confirmation() {
         </div>
         <div className="flex items-center justify-between pt-2 border-t border-line-subtle">
           <span className="text-caption text-ink-tertiary">Ownership status</span>
-          <ChainBadge
-            status={detail.chain_status}
-            txUrl={detail.nft_tx_hash ? BASESCAN_BASE + detail.nft_tx_hash : undefined}
-          />
+          <ChainBadge status={detail.chain_status} txUrl={detail.chain?.mint_tx_url} />
         </div>
         </div>
       </Card>
 
-      <p className="text-caption text-ink-tertiary">Your ticket is ready to use right now — you don't need to wait for the badge above.</p>
+      <p className="text-caption text-ink-tertiary">Your ticket is ready to use right now — you don't need to wait for the badge above. Its full on-chain record is on your ticket.</p>
+      {detail.receipt_email && (
+        <p className="text-body-sm text-ink-secondary inline-flex items-center gap-1.5">
+          <Mail size={14} aria-hidden="true" /> Receipt on its way to {detail.receipt_email}
+        </p>
+      )}
 
       <div className="flex flex-col gap-2 w-full">
         <Link to={`/tickets/${detail.ticket_id}`}>
           <Button variant="primary" className="w-full">View my ticket</Button>
         </Link>
-        <Button variant="secondary" iconLeft={<CalendarPlus size={14} />}>
-          Add to calendar
-        </Button>
+        <AddToCalendar event={detail} ticketId={detail.ticket_id} className="w-full" />
       </div>
 
       <style>{`@keyframes popIn { from { transform: scale(0.6); opacity: 0 } to { transform: scale(1); opacity: 1 } }`}</style>

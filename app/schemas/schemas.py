@@ -272,6 +272,14 @@ class TicketOut(BaseModel):
     nft_token_id: Optional[int]
     purchased_at: Optional[datetime]
     created_at: datetime
+    # Enough of the event and tier for My Tickets to list every ticket —
+    # including ones for past events, which the public event list omits.
+    event_title: Optional[str] = None
+    event_date: Optional[datetime] = None
+    venue: Optional[str] = None
+    category: Optional[str] = None
+    image_url: Optional[str] = None
+    tier_name: Optional[str] = None
     # Note: totp_secret is NEVER returned via API — only via the secure ticket app
 
     model_config = {"from_attributes": True}
@@ -655,3 +663,16 @@ class FeatureFlagRollout(BaseModel):
 
 class ConsoleScanRequest(BaseModel):
     qr_payload: str = Field(min_length=1, max_length=200)
+
+
+class TicketTransferRequest(BaseModel):
+    """The recipient's ChainTix phone number or email address."""
+    recipient: str = Field(min_length=3, max_length=255)
+
+    @field_validator("recipient")
+    @classmethod
+    def phone_or_email(cls, v):
+        v = v.strip()
+        if "@" in v:
+            return v.lower()
+        return normalize_kenyan_phone(v)

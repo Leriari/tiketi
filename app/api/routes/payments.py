@@ -24,7 +24,7 @@ from app.core.config import get_settings
 from app.core.rate_limit import enforce_rate_limit
 from app.services import organiser_service
 from app.services.platform_settings import flag_on
-from app.worker import mint_ticket_nft, settle_resale_transfer
+from app.worker import mint_ticket_nft, send_payment_receipt, settle_resale_transfer
 
 router = APIRouter(prefix="/payments", tags=["Payments"])
 logger = logging.getLogger(__name__)
@@ -305,6 +305,8 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
             mint_ticket_nft.delay(ticket.id)
         if paid_transfer:
             settle_resale_transfer.delay(paid_transfer.id)
+        if (minted_tickets or paid_transfer) and settings.EMAIL_CONFIGURED:
+            send_payment_receipt.delay(payment.id)
 
     except Exception as e:
         logger.error(f"Callback processing error: {e}", exc_info=True)
@@ -376,5 +378,7 @@ def dev_confirm_payment(
     elif transfer:
         logger.info(f"[DEV] Resale payment {payment.id} manually confirmed. Transfer {transfer.id} paid.")
         settle_resale_transfer.delay(transfer.id)
+    if (tickets or transfer) and settings.EMAIL_CONFIGURED:
+        send_payment_receipt.delay(payment.id)
 
     return payment

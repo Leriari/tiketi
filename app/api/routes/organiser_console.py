@@ -41,7 +41,7 @@ from app.services.auth_service import get_or_create_user
 from app.services.gate_partitioning import assign_gate
 from app.services.platform_settings import DEFAULT_FEES, FeeHistory, current_fees
 from app.services.totp_service import generate_totp_secret
-from app.worker import mint_ticket_nft
+from app.worker import mark_ticket_used_onchain, mint_ticket_nft
 
 router = APIRouter(prefix="/organisations/{organization_id}", tags=["Organiser Console"])
 logger = logging.getLogger(__name__)
@@ -244,6 +244,8 @@ def _ticket_row(db: Session, ticket: Ticket, gate_lists: dict[str, list[str]]) -
         timeline.append({"label": "Listed for resale", "at": _iso(_naive(tr.created_at)), "tx_hash": tr.listing_tx_hash})
         if tr.status == TransferStatus.COMPLETED and tr.transferred_at:
             timeline.append({"label": "Resold", "at": _iso(_naive(tr.transferred_at)), "tx_hash": tr.settlement_tx_hash})
+    for gift in db.query(AuditLog).filter(AuditLog.action_type == "ticket_transferred", AuditLog.target_id == ticket.id).all():
+        timeline.append({"label": "Given to another attendee", "at": _iso(_naive(gift.created_at))})
     admitted_rows = [a for a in attendance if a.status == AttendanceStatus.ADMITTED]
     if ticket.used_at:
         timeline.append({"label": "Admitted at gate", "at": _iso(_naive(ticket.used_at))})
@@ -268,6 +270,7 @@ def _ticket_row(db: Session, ticket: Ticket, gate_lists: dict[str, list[str]]) -
         "event_title": event.title if event else None,
         "tier_name": ticket.tier.tier_name if ticket.tier else None,
         "holder_phone_masked": _mask(ticket.owner.phone_number if ticket.owner else ""),
+        "holder_name": ticket.owner.display_name if ticket.owner else None,
         "status": ticket.status.value,
         "purchased_at": _iso(_naive(ticket.purchased_at)),
         "nft_token_id": ticket.nft_token_id,
@@ -701,7 +704,14 @@ def manual_override(
         target_type="ticket", details=body.reason,
     ))
     db.commit()
+    _record_admission_onchain(ticket.id)
     return {"success": True}
+
+
+def _record_admission_onchain(ticket_id: str) -> None:
+    """Queue TiketiNFT.markUsed for an admitted ticket (app/worker.py)."""
+    if settings.BLOCKCHAIN_CONFIGURED:
+        mark_ticket_used_onchain.delay(ticket_id)
 
 
 @router.post("/events/{event_id}/scan")
@@ -754,12 +764,15 @@ def console_scan(
     ticket.used_at = now
     db.add(Attendance(ticket_id=ticket.id, event_id=event.id, scanner_id=None, scan_time=now, status=AttendanceStatus.ADMITTED))
     db.commit()
+    _record_admission_onchain(ticket.id)
     return {
         "valid": True,
         "ticket_id": ticket.id,
         "event_title": event.title,
         "tier_name": ticket.tier.tier_name if ticket.tier else None,
         "owner_phone": _mask(ticket.owner.phone_number if ticket.owner else None),
+        # So door staff can check it against an ID.
+        "holder_name": ticket.owner.display_name if ticket.owner else None,
         "complimentary": bool(ticket.is_complimentary),
         "scanned_at": _iso(now),
     }

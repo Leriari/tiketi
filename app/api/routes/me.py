@@ -8,10 +8,13 @@ leaves behind — payments, tickets, resale transfers, wallet payouts,
 organisation memberships — plus the audit log for things that leave no
 other trace (sign-ins, organiser actions). Nothing is stored twice.
 """
+import re
 from datetime import datetime
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, field_validator
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.api.routes.resale import _compute_wallet
@@ -30,15 +33,33 @@ _EXPORT_LABELS = {
 }
 
 
+_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
 class ProfileUpdate(BaseModel):
-    display_name: str
+    """Either or both. display_name is the person's full name — it's on
+    their receipts and shown to organisers on guest lists."""
+    display_name: Optional[str] = None
+    email: Optional[str] = None
 
     @field_validator("display_name")
     @classmethod
     def sensible_name(cls, v):
+        if v is None:
+            return v
         v = " ".join(v.split())
         if not 1 <= len(v) <= 60:
             raise ValueError("Your name must be 1-60 characters.")
+        return v
+
+    @field_validator("email")
+    @classmethod
+    def valid_email(cls, v):
+        if v is None:
+            return v
+        v = v.strip().lower()
+        if len(v) > 255 or not _EMAIL.match(v):
+            raise ValueError("Enter a valid email address, e.g. name@example.com.")
         return v
 
 
@@ -127,6 +148,9 @@ def _profile(db: Session, user: User) -> dict:
             "phone_number": user.phone_number,
             "display_name": user.display_name,
             "email": user.email,
+            "email_verified": bool(user.email_verified),
+            # Name and email are asked for once, at sign-up (the welcome step).
+            "profile_complete": bool(user.display_name and user.email),
             "google_linked": bool(user.google_sub),
             "phone_verified": user.phone_verified is not False,
             "member_since": _iso(user.created_at),
@@ -155,7 +179,16 @@ def get_profile(db: Session = Depends(get_db), current_user: User = Depends(get_
 
 @router.patch("/profile")
 def update_profile(body: ProfileUpdate, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
-    current_user.display_name = body.display_name
+    if body.display_name is None and body.email is None:
+        raise HTTPException(status_code=422, detail="Nothing to update.")
+    if body.display_name is not None:
+        current_user.display_name = body.display_name
+    if body.email is not None and body.email != (current_user.email or "").lower():
+        taken = db.query(User.id).filter(func.lower(User.email) == body.email, User.id != current_user.id).first()
+        if taken:
+            raise HTTPException(status_code=409, detail="Another ChainTix account already uses that email address.")
+        current_user.email = body.email
+        current_user.email_verified = False  # typed in, not confirmed by Google
     db.commit()
     return _profile(db, current_user)
 
@@ -184,6 +217,15 @@ def _entry(kind: str, category: str, at, title: str, detail: str | None = None, 
             "detail": detail, "amount_kes": amount_kes, "link": link}
 
 
+def _who(user: User | None) -> str:
+    if not user:
+        return "someone"
+    if user.display_name:
+        return user.display_name
+    phone = user.phone_number or ""
+    return "0" + phone[3:] if phone.startswith("254") else phone
+
+
 def _activity(db: Session, user: User) -> list[dict]:
     items = [_entry("account_created", "security", user.created_at, "Account created", key=user.id)]
 
@@ -203,10 +245,24 @@ def _activity(db: Session, user: User) -> list[dict]:
         elif log.action_type == "export":
             export_type = (log.details or "").partition(":")[0]
             items.append(_entry("export", "organiser", log.created_at, f"Exported {_EXPORT_LABELS.get(export_type, export_type)}", key=log.id))
+        elif log.action_type == "ticket_transferred":
+            ticket = db.get(Ticket, log.target_id)
+            to = db.get(User, (log.details or "")[3:])
+            items.append(_entry("gift_sent", "ticket", log.created_at,
+                                f"Gave your ticket for {ticket.event.title if ticket and ticket.event else 'an event'} to {_who(to)}",
+                                key=log.id))
         elif log.action_type.startswith("resale_rejected"):
             price = d.get("price_kes")
             items.append(_entry("listing_refused", "resale", log.created_at, "Listing price refused",
                                 f"KES {price} is above the organiser's limit" if price else None, key=log.id))
+
+    # Tickets others gave you.
+    for log in db.query(AuditLog).filter(AuditLog.action_type == "ticket_transferred", AuditLog.details == f"to={user.id}").all():
+        ticket = db.get(Ticket, log.target_id)
+        sender = db.get(User, log.actor_id) if log.actor_id else None
+        items.append(_entry("gift_received", "ticket", log.created_at,
+                            f"Received a ticket for {ticket.event.title if ticket and ticket.event else 'an event'} from {_who(sender)}",
+                            link=f"/tickets/{log.target_id}", key=log.id))
 
     # Payments: primary purchases and resale purchases.
     resale_payment_ids = {t.payment_id: t for t in db.query(Transfer).filter(Transfer.buyer_id == user.id).all() if t.payment_id}

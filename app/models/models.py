@@ -5,7 +5,7 @@ from sqlalchemy import (
     ForeignKey, Enum as SAEnum, Text, JSON, LargeBinary
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
-from sqlalchemy import true as sa_true
+from sqlalchemy import false as sa_false, true as sa_true
 from app.db.session import Base
 import enum
 
@@ -146,6 +146,9 @@ class User(Base):
     # Phone is the identity — no password needed (OTP-based auth)
     display_name: Mapped[str | None] = mapped_column(String(100))
     email: Mapped[str | None] = mapped_column(String(255), unique=True)
+    # True when the address came from Google (which verifies it); a typed-in
+    # address stays false. Receipts go to either.
+    email_verified: Mapped[bool] = mapped_column(Boolean, default=False, server_default=sa_false())
     # Google account ("sub" claim) linked to this user, if they've used
     # "Continue with Google". Every account still has a verified phone —
     # Google sign-in links to one, it never replaces it.
@@ -438,6 +441,8 @@ class Ticket(Base):
     # NFT details (populated in the smart-contract phase of the roadmap)
     nft_token_id: Mapped[int | None] = mapped_column(Integer)
     nft_tx_hash: Mapped[str | None] = mapped_column(String(66))
+    # The markUsed transaction once the ticket was admitted at the gate.
+    used_tx_hash: Mapped[str | None] = mapped_column(String(66))
 
     # Seat info (if applicable)
     seat_number: Mapped[str | None] = mapped_column(String(20))
@@ -739,13 +744,16 @@ class WalletTransaction(Base):
 
 
 class Notification(Base):
-    """Outbound message record (SMS/push/email). Not yet wired to any route."""
+    """Outbound message record. Written for every email ChainTix sends
+    (app/worker.py): reference is what it was about (a payment or transfer
+    id), so a retried task never sends the same receipt twice."""
     __tablename__ = "notifications"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     recipient_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)
     notification_type: Mapped[str] = mapped_column(String(50), nullable=False)
     channel: Mapped[str] = mapped_column(String(20), default="sms")
+    reference: Mapped[str | None] = mapped_column(String(64), index=True)
     status: Mapped[NotificationStatus] = mapped_column(
         SAEnum(NotificationStatus), default=NotificationStatus.PENDING
     )

@@ -1,26 +1,31 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
+import { ShieldCheck } from "lucide-react";
 import { api } from "../../api";
 import { Tabs, Badge, EmptyState, Skeleton } from "../../components/ui";
 import { formatEventDate } from "../../format";
 import EventCover from "../../components/EventCover";
 
 const STATUS_TONE = { active: "success", used: "neutral", cancelled: "danger", resale: "warning", pending_payment: "warning" };
-const STATUS_LABEL = { active: "Active", used: "Used", cancelled: "Refunded", resale: "Listed", pending_payment: "Awaiting payment" };
+const STATUS_LABEL = { active: "Active", used: "Used", cancelled: "Cancelled", resale: "Listed", pending_payment: "Awaiting payment" };
 
 export default function MyTickets() {
   const [tab, setTab] = useState("upcoming");
   const [tickets, setTickets] = useState(null);
-  const [eventsById, setEventsById] = useState({});
 
   useEffect(() => {
-    Promise.all([api.myTickets(), api.listEvents()]).then(([t, events]) => {
-      setTickets(t);
-      setEventsById(Object.fromEntries(events.map((e) => [e.id, e])));
-    });
+    api.myTickets().then(setTickets);
   }, []);
 
-  const withEvents = useMemo(() => tickets?.map((t) => ({ ...t, event: eventsById[t.event_id] })).filter((t) => t.event) || null, [tickets, eventsById]);
+  // Each ticket carries its own event details, so tickets for past or
+  // unlisted events show up too (the public event list leaves those out).
+  const withEvents = useMemo(() => tickets?.map((t) => ({
+    ...t,
+    event: {
+      id: t.event_id, title: t.event_title, venue: t.venue, event_date: t.event_date,
+      category: t.category, image_url: t.image_url, image_data_url: t.image_data_url,
+    },
+  })).filter((t) => t.event.event_date) || null, [tickets]);
 
   const grouped = useMemo(() => {
     if (!withEvents) return null;
@@ -73,15 +78,17 @@ export default function MyTickets() {
                 <p className="text-body font-semibold text-ink-primary truncate">{t.event.title}</p>
                 <p className="text-caption text-ink-tertiary truncate">{t.event.venue}</p>
                 <p className="text-caption text-ink-tertiary tabular-nums">{formatEventDate(t.event.event_date)}</p>
+                <p className="text-caption text-ink-tertiary inline-flex items-center gap-1">
+                  {t.tier_name || "General"} ·
+                  {t.nft_token_id
+                    ? <span className="inline-flex items-center gap-0.5 text-chain-verified"><ShieldCheck size={12} aria-hidden="true" /> On-chain #{t.nft_token_id}</span>
+                    : <span>Securing on-chain…</span>}
+                </p>
               </div>
               <Badge tone={STATUS_TONE[t.status] || "neutral"}>{STATUS_LABEL[t.status] || t.status}</Badge>
             </div>
           );
-          return t.status === "active" ? (
-            <Link key={t.id} to={`/tickets/${t.id}`}>{inner}</Link>
-          ) : (
-            <div key={t.id}>{inner}</div>
-          );
+          return <Link key={t.id} to={`/tickets/${t.id}`}>{inner}</Link>;
         })}
       </div>
     </div>

@@ -53,7 +53,13 @@ function GoogleMark() {
 //   otherwise this backend's own OTP (request-otp/verify-otp), with the
 //   code shown in a dev panel in development.
 // Firebase ID tokens are exchanged at /auth/firebase for this app's session.
-export default function Login() {
+//
+// mode="signup" (/signup) is the same screen worded for someone new: there
+// are no passwords, so signing up and logging in are one step. A new
+// account then gets the one-time Welcome step for name and email
+// (ProfileGate in App.jsx).
+export default function Login({ mode = "login" }) {
+  const signup = mode === "signup";
   const navigate = useNavigate();
   const [params] = useSearchParams();
   // Only ever an in-app path — never an absolute URL someone put in a link.
@@ -238,14 +244,18 @@ export default function Login() {
       </Link>
       <div className="flex items-center gap-2.5 mb-2">
         <Link to="/" title="Home" className="rounded-md"><BrandMark size={34} /></Link>
-        <h1 className="text-h2 text-ink-primary font-semibold tracking-[-0.02em]">Log in</h1>
+        <h1 className="text-h2 text-ink-primary font-semibold tracking-[-0.02em]">{signup ? "Create your account" : "Log in"}</h1>
       </div>
       <p className="text-body-sm text-ink-tertiary mb-8">
         {usingMockBackend
           ? "Demo mode (mock backend): any Kenyan number logs you in, no code needed."
-          : googleFirst
-            ? "Sign in with your Google account. New here? Your account is created on the spot."
-            : "We'll send a one-time code to your phone. New numbers get an account automatically."}
+          : signup
+            ? googleFirst
+              ? "Sign up with your Google account. Then add your name and email once, so your tickets and receipts are in your name."
+              : "Sign up with your phone number. Then add your name and email once, so your tickets and receipts are in your name."
+            : googleFirst
+              ? "Sign in with your Google account. New here? Your account is created on the spot."
+              : "We'll send a one-time code to your phone. New numbers get an account automatically."}
       </p>
 
       {googleFirst && (
@@ -357,6 +367,14 @@ export default function Login() {
           </div>
         </form>
       )}
+
+      <p className="text-body-sm text-ink-tertiary text-center mt-8">
+        {signup ? (
+          <>Already have an account? <Link to={`/login${returnTo !== "/" ? `?return=${encodeURIComponent(returnTo)}` : ""}`} className="text-brand-primary-on-tint font-semibold hover:underline">Log in</Link></>
+        ) : (
+          <>New to ChainTix? <Link to={`/signup${returnTo !== "/" ? `?return=${encodeURIComponent(returnTo)}` : ""}`} className="text-brand-primary-on-tint font-semibold hover:underline">Create an account</Link></>
+        )}
+      </p>
 
       {/* Firebase's invisible reCAPTCHA (abuse protection for SMS) attaches here. */}
       <div id={RECAPTCHA_ID} />
