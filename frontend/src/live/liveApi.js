@@ -176,6 +176,9 @@ export const liveApi = {
   // Work Order 04 C1 — AuthContext fetches this right after login to know
   // which organisations (and at which role) this user can manage.
   getMyOrganisations: () => request("/organisations/mine"),
+  // "Become an organiser": { business_name, contact_email?, contact_phone?, kra_pin? }.
+  // The caller becomes the new organisation's owner.
+  createOrganisation: (payload) => request("/organisations/", { method: "POST", body: payload }),
 
   // The signed-in user's own account (app/api/routes/me.py).
   getProfile: () => request("/me/profile"),
@@ -195,6 +198,8 @@ export const liveApi = {
   purchaseTicket: (payload) => request("/payments/purchase", { method: "POST", body: payload }),
   getPaymentStatus: (paymentId) => request(`/payments/${paymentId}/status`),
   devConfirmPayment: (paymentId) => request(`/payments/${paymentId}/dev-confirm`, { method: "POST" }),
+  // The buyer came back from Paystack's card page without paying.
+  cancelPayment: (paymentId) => request(`/payments/${paymentId}/cancel`, { method: "POST" }),
 
   myTickets: () => request("/tickets/my"),
   getTicketSeed: (ticketId) => request(`/tickets/${ticketId}/seed`),

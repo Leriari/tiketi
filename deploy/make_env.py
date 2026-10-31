@@ -97,6 +97,9 @@ def main():
         ("SMTP_USERNAME", keep("SMTP_USERNAME")),
         ("SMTP_PASSWORD", keep("SMTP_PASSWORD")),
         ("SITE_URL", FIREBASE_SITE.split(",")[0]),
+        ("", None),
+        ("# Card payments — Paystack test mode (DEPLOY.md). Leave empty for M-Pesa only.", None),
+        ("PAYSTACK_SECRET_KEY", keep("PAYSTACK_SECRET_KEY")),
     ]
     lines = [k if v is None else f"{k}={v}" for k, v in values]
     OUT.write_text("\n".join(lines) + "\n", encoding="utf-8")

@@ -522,7 +522,16 @@ class Payment(Base):
     merchant_request_id: Mapped[str | None] = mapped_column(String(100), index=True)
     checkout_request_id: Mapped[str | None] = mapped_column(String(100), index=True, unique=True)
     mpesa_receipt_number: Mapped[str | None] = mapped_column(String(50))  # e.g. OEI2AK4MFU
+    # The M-Pesa number charged; for a card payment, the buyer's own number.
     phone_number: Mapped[str] = mapped_column(String(15), nullable=False)
+
+    # "mpesa" (an STK push: the Daraja fields above) or "card" (a Paystack
+    # transaction: the fields below). See app/services/paystack_service.py.
+    method: Mapped[str] = mapped_column(String(10), default="mpesa", server_default="mpesa", nullable=False)
+    provider_reference: Mapped[str | None] = mapped_column(String(100), index=True, unique=True)  # Paystack reference
+    provider_transaction_id: Mapped[str | None] = mapped_column(String(50))  # Paystack's transaction ID
+    card_brand: Mapped[str | None] = mapped_column(String(20))   # visa, mastercard, amex…
+    card_last4: Mapped[str | None] = mapped_column(String(4))
 
     initiated_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     confirmed_at: Mapped[datetime | None] = mapped_column(DateTime)
@@ -531,6 +540,21 @@ class Payment(Base):
     ticket: Mapped["Ticket"] = relationship("Ticket", back_populates="payments", foreign_keys=[ticket_id])
     tier: Mapped["EventTier | None"] = relationship("EventTier", back_populates="payments")
     user: Mapped["User"] = relationship("User", back_populates="payments")
+
+    @property
+    def reference(self) -> str | None:
+        """The provider's own reference: the M-Pesa receipt or the Paystack reference."""
+        return self.provider_reference if self.method == "card" else self.mpesa_receipt_number
+
+    @property
+    def paid_with(self) -> str | None:
+        """How the buyer paid, as they'd recognise it: "M-Pesa OEI2AK4MFU" or "Visa •••• 4242"."""
+        if self.method == "card":
+            if self.status != PaymentStatus.SUCCESS:
+                return None
+            brand = {"amex": "American Express", "mastercard": "Mastercard"}.get(self.card_brand or "", (self.card_brand or "Card").title())
+            return f"{brand} •••• {self.card_last4}" if self.card_last4 else brand
+        return f"M-Pesa {self.mpesa_receipt_number}" if self.mpesa_receipt_number else None
 
 
 class Barcode(Base):

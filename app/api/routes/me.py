@@ -272,12 +272,12 @@ def _activity(db: Session, user: User) -> list[dict]:
         if p.status == PaymentStatus.SUCCESS:
             if p.id in resale_payment_ids:
                 items.append(_entry("resale_bought", "resale", p.confirmed_at or p.initiated_at, f"Bought a resale ticket for {title_event}",
-                                    f"M-Pesa {p.mpesa_receipt_number}" if p.mpesa_receipt_number else None, -p.amount_kes, "/tickets", p.id))
+                                    p.paid_with, -p.amount_kes, "/tickets", p.id))
             else:
                 qty = p.quantity or 1
                 items.append(_entry("purchase", "purchase", p.confirmed_at or p.initiated_at,
                                     f"Bought {qty} ticket{'s' if qty > 1 else ''} for {title_event}",
-                                    f"M-Pesa {p.mpesa_receipt_number}" if p.mpesa_receipt_number else None, -p.amount_kes, "/tickets", p.id))
+                                    p.paid_with, -p.amount_kes, "/tickets", p.id))
         elif p.status in (PaymentStatus.FAILED, PaymentStatus.TIMEOUT):
             items.append(_entry("payment_failed", "purchase", p.initiated_at, f"Payment didn't complete for {title_event}",
                                 p.failure_reason, None, None, p.id))

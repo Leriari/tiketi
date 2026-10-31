@@ -831,6 +831,17 @@ export const mockApi = {
     return mockApi.getPaymentStatus(paymentId);
   },
 
+  // Mock mode has no card payments (health reports none), so nothing calls this.
+  cancelPayment: async (paymentId) => mockApi.getPaymentStatus(paymentId),
+
+  // Mock mode has no organisations (the console runs on simulated data), so
+  // registering just hands back the new one.
+  createOrganisation: async (payload) => {
+    requireUser();
+    await delay(300);
+    return { id: uuid(), business_name: payload.business_name, verification_status: "pending", created_at: new Date().toISOString() };
+  },
+
   myTickets: async () => {
     const userId = requireUser();
     await delay(200);

@@ -49,7 +49,9 @@ export default function AttendeeShell() {
     { label: "My tickets", onClick: () => navigate("/tickets") },
     { label: "My profile", onClick: () => navigate("/profile") },
     { label: "Sell tickets", onClick: () => navigate("/seller") },
-    ...(access.organiser ? [{ label: "Organiser Console", onClick: () => navigate("/organiser") }] : []),
+    access.organiser
+      ? { label: "Organiser Console", onClick: () => navigate("/organiser") }
+      : { label: "Become an organiser", onClick: () => navigate("/organiser/register") },
     ...(access.admin ? [{ label: "Platform admin", onClick: () => navigate("/admin") }] : []),
     { label: "Log out", danger: true, onClick: () => { logout(); navigate("/"); } },
   ];

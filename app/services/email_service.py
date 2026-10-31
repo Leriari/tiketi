@@ -114,7 +114,7 @@ FOOTER = ("You're receiving this because you bought or were sent a ticket on Cha
 
 def purchase_receipt(*, name: str | None, order_ref: str, event_title: str, event_date: datetime | None,
                      venue: str, tier_name: str, quantity: int, amount_kes: float, mpesa_receipt: str | None,
-                     paid_at: datetime | None, phone: str, resale: bool, tickets_url: str) -> tuple[str, str, str]:
+                     card: str | None = None, paid_at: datetime | None, phone: str, resale: bool, tickets_url: str) -> tuple[str, str, str]:
     """(subject, text, html) for a confirmed payment."""
     what = "resale ticket" if resale else f"ticket{'s' if quantity != 1 else ''}"
     heading = f"You're going to {event_title}"
@@ -128,8 +128,7 @@ def purchase_receipt(*, name: str | None, order_ref: str, event_title: str, even
         ("Where", venue),
         ("Ticket", f"{quantity} × {tier_name}{' (resale)' if resale else ''}"),
         ("Total paid", kes(amount_kes)),
-        ("M-Pesa receipt", mpesa_receipt or "—"),
-        ("Paid from", phone),
+        *([("Paid by card", card)] if card else [("M-Pesa receipt", mpesa_receipt or "—"), ("Paid from", phone)]),
         ("Paid on", nairobi_time(paid_at, with_weekday=False)),
         ("Order", order_ref),
     ]

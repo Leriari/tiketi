@@ -342,6 +342,7 @@ def send_payment_receipt(self, payment_id: str, force: bool = False):
             quantity=1 if transfer else (payment.quantity or 1),
             amount_kes=payment.amount_kes,
             mpesa_receipt=payment.mpesa_receipt_number,
+            card=payment.paid_with if payment.method == "card" else None,
             paid_at=payment.confirmed_at,
             phone=_local_phone(payment.phone_number or user.phone_number),
             resale=bool(transfer),

@@ -19,6 +19,7 @@ import TicketCredential from "./pages/attendee/TicketCredential";
 import Profile from "./pages/Profile";
 import NotFound from "./pages/NotFound";
 import EventsList from "./pages/organiser/EventsList";
+import OrganiserRegister from "./pages/organiser/Register";
 import ResaleMarketplace from "./pages/attendee/ResaleMarketplace";
 import ResaleCheckout from "./pages/attendee/ResaleCheckout";
 import SellerShell from "./shells/SellerShell";
@@ -156,6 +157,8 @@ export default function App() {
                 <Route path="/tickets" element={<MyTickets />} />
                 <Route path="/tickets/:ticketId" element={<TicketCredential />} />
                 <Route path="/profile" element={<Profile />} />
+                {/* Outside the console's own guard: it's for people with no organisation yet. */}
+                <Route path="/organiser/register" element={<OrganiserRegister />} />
                 {/* The old Account page grew into the cross-role profile. */}
                 <Route path="/account" element={<Navigate to="/profile" replace />} />
               </Route>

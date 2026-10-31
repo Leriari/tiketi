@@ -1,13 +1,18 @@
 """
 Payment flow:
-  POST /payments/purchase     → STK push sent to user's phone
+  POST /payments/purchase     → STK push sent to user's phone, or (method
+                                "card") a Paystack Checkout page to send them to
   POST /payments/mpesa/callback → Daraja confirms payment → ticket activated
-  GET  /payments/{id}/status  → Poll payment status
+  POST /payments/paystack/webhook → Paystack confirms a card payment → same
+  GET  /payments/{id}/status  → Poll payment status (for a card payment,
+                                also asks Paystack, so no webhook is needed)
+  POST /payments/{id}/cancel  → The buyer cancelled on Paystack's page
 """
 import logging
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi.concurrency import run_in_threadpool
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -17,6 +22,8 @@ from app.models.models import (
 )
 from app.schemas.schemas import PurchaseRequest, PurchaseResponse, PaymentStatusOut
 from app.services import mpesa as mpesa_service
+from app.services import paystack_service
+from app.services.paystack_service import PaystackError
 from app.services.totp_service import generate_totp_secret
 from app.core.crypto import encrypt_secret
 from app.core.dependencies import get_current_user
@@ -98,6 +105,93 @@ def _handle_payment_success(db: Session, payment: Payment, receipt_number: str) 
     return _activate_ticket_for_payment(db, payment, receipt_number), None
 
 
+def _handle_payment_failure(db: Session, payment: Payment, reason: str) -> None:
+    """Shared failure path: the payment failed, so a resale listing goes back
+    on sale and an original purchase's pending tickets are cancelled."""
+    payment.status = PaymentStatus.FAILED
+    payment.failure_reason = reason[:255]
+
+    transfer = db.query(Transfer).filter(Transfer.payment_id == payment.id).first()
+    if transfer:
+        # Release the listing back to the seller rather than
+        # cancelling anything — the ticket was never touched.
+        transfer.status = TransferStatus.LISTED
+        transfer.buyer_id = None
+    else:
+        tickets = (
+            db.query(Ticket)
+            .filter((Ticket.id == payment.ticket_id) | (Ticket.group_payment_id == payment.id))
+            .all()
+        )
+        for ticket in tickets:
+            ticket.status = TicketStatus.CANCELLED
+
+
+def _after_success(payment: Payment, tickets: list[Ticket], transfer: Transfer | None) -> None:
+    """Background work once a success is committed: mint the new tickets
+    (or settle the resale), then email the receipt."""
+    for ticket in tickets:
+        mint_ticket_nft.delay(ticket.id)
+    if transfer:
+        settle_resale_transfer.delay(transfer.id)
+    if (tickets or transfer) and settings.EMAIL_CONFIGURED:
+        send_payment_receipt.delay(payment.id)
+
+
+def _claim(db: Session, payment: Payment) -> bool:
+    """Atomically take an INITIATED payment out of that state. The Paystack
+    webhook and the checkout page's status poll can arrive at the same
+    moment; only the one whose UPDATE matches gets to apply the outcome."""
+    claimed = (
+        db.query(Payment)
+        .filter(Payment.id == payment.id, Payment.status == PaymentStatus.INITIATED)
+        .update({Payment.status: PaymentStatus.SUCCESS}, synchronize_session=False)
+    )
+    return claimed == 1
+
+
+def _settle_card_transaction(db: Session, payment: Payment, txn: dict) -> None:
+    """Apply a verified Paystack transaction's outcome to its payment, at
+    most once. Success, for the full amount in KES: the same success path as
+    an M-Pesa receipt. Failed or reversed: failed. Anything else (abandoned,
+    ongoing…): the buyer hasn't finished on Paystack's page, so no change."""
+    outcome = txn.get("status")
+    if outcome == "success" and (
+        txn.get("currency") != "KES" or int(txn.get("amount") or 0) != paystack_service.amount_subunits(payment.amount_kes)
+    ):
+        logger.error(
+            f"Paystack transaction {payment.id} succeeded for {txn.get('currency')} {txn.get('amount')} "
+            f"but the order is KES {payment.amount_kes} — not applied; needs a manual check."
+        )
+        return
+    paid = outcome == "success"
+    failed = outcome in ("failed", "reversed")
+    if not (paid or failed):
+        return
+    if not _claim(db, payment):
+        db.rollback()
+        db.refresh(payment)
+        if paid and payment.status != PaymentStatus.SUCCESS:
+            logger.error(
+                f"Paystack says payment {payment.id} was paid, but it is already {payment.status.value} "
+                f"— not applied; needs a manual refund check."
+            )
+        return
+
+    if paid:
+        details = paystack_service.card_details(txn)
+        payment.provider_transaction_id = details["transaction_id"]
+        payment.card_brand = details["card_brand"]
+        payment.card_last4 = details["card_last4"]
+        tickets, transfer = _handle_payment_success(db, payment, receipt_number=None)
+        db.commit()
+        logger.info(f"Card payment {payment.id} confirmed ({payment.paid_with}).")
+        _after_success(payment, tickets, transfer)
+    else:
+        _handle_payment_failure(db, payment, txn.get("gateway_response") or "The card payment was declined.")
+        db.commit()
+
+
 @router.post("/purchase", response_model=PurchaseResponse, status_code=status.HTTP_201_CREATED)
 async def purchase_ticket(
     body: PurchaseRequest,
@@ -154,6 +248,14 @@ async def purchase_ticket(
     if tier.tickets_remaining < body.quantity:
         raise HTTPException(status_code=400, detail="Not enough tickets remaining in this tier")
 
+    total_amount = tier.price_kes * body.quantity
+    if body.method == "card":
+        if not settings.PAYSTACK_CONFIGURED:
+            raise HTTPException(status_code=400, detail="Card payments aren't available yet. Pay with M-Pesa instead.")
+        if not current_user.email:
+            # Paystack sends its own card receipt, so it requires one.
+            raise HTTPException(status_code=400, detail="Add an email address to your profile to pay by card.")
+
     # ── 2. Create `quantity` pending tickets, each with its own credential ──
     tickets = []
     for _ in range(body.quantity):
@@ -181,7 +283,6 @@ async def purchase_ticket(
     db.flush()
 
     primary_ticket = tickets[0]
-    total_amount = tier.price_kes * body.quantity
 
     # ── 3. Create one payment record covering the whole quantity ────────────
     payment = Payment(
@@ -190,7 +291,8 @@ async def purchase_ticket(
         user_id=current_user.id,
         amount_kes=total_amount,
         quantity=body.quantity,
-        phone_number=body.phone_number,
+        phone_number=body.phone_number or current_user.phone_number,
+        method=body.method,
         status=PaymentStatus.INITIATED,
     )
     db.add(payment)
@@ -201,6 +303,35 @@ async def purchase_ticket(
     for ticket in tickets[1:]:
         ticket.group_payment_id = payment.id
     db.flush()
+
+    # ── 4a. Card: open a Paystack Checkout page for the buyer ───────────────
+    if body.method == "card":
+        # Paystack sends the buyer back here either way; the checkout page
+        # then polls /status (paid) or calls /cancel (pressed Cancel).
+        back = f"{settings.SITE_URL.rstrip('/')}/checkout/{event.id}?tier={tier.id}&payment={payment.id}"
+        try:
+            txn = await run_in_threadpool(
+                paystack_service.initialize_transaction,
+                reference=payment.id,
+                amount_kes=total_amount,
+                email=current_user.email,
+                description=f"{body.quantity} × {event.title} · {tier.tier_name}",
+                callback_url=f"{back}&card=done",
+                cancel_url=f"{back}&card=cancelled",
+            )
+        except PaystackError as e:
+            db.rollback()
+            raise HTTPException(status_code=502, detail=f"Card payment couldn't start: {e}")
+        payment.provider_reference = txn.get("reference") or payment.id
+        db.commit()
+        return PurchaseResponse(
+            ticket_id=primary_ticket.id,
+            ticket_ids=[t.id for t in tickets],
+            payment_id=payment.id,
+            method="card",
+            checkout_url=txn["authorization_url"],
+            message="Continue to the secure card payment page.",
+        )
 
     # ── 4. Send STK Push ─────────────────────────────────────────────────────
     try:
@@ -279,34 +410,11 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
 
         else:
             # ── Payment failed ───────────────────────────────────────────────
-            payment.status = PaymentStatus.FAILED
-            payment.failure_reason = parsed.get("result_desc", "Unknown failure")
-
-            transfer = db.query(Transfer).filter(Transfer.payment_id == payment.id).first()
-            if transfer:
-                # Release the listing back to the seller rather than
-                # cancelling anything — the ticket was never touched.
-                transfer.status = TransferStatus.LISTED
-                transfer.buyer_id = None
-            else:
-                tickets = (
-                    db.query(Ticket)
-                    .filter((Ticket.id == payment.ticket_id) | (Ticket.group_payment_id == payment.id))
-                    .all()
-                )
-                for ticket in tickets:
-                    ticket.status = TicketStatus.CANCELLED
-
+            _handle_payment_failure(db, payment, parsed.get("result_desc") or "Unknown failure")
             logger.info(f"Payment failed for payment {payment.id}: {payment.failure_reason}")
 
         db.commit()
-
-        for ticket in minted_tickets:
-            mint_ticket_nft.delay(ticket.id)
-        if paid_transfer:
-            settle_resale_transfer.delay(paid_transfer.id)
-        if (minted_tickets or paid_transfer) and settings.EMAIL_CONFIGURED:
-            send_payment_receipt.delay(payment.id)
+        _after_success(payment, minted_tickets, paid_transfer)
 
     except Exception as e:
         logger.error(f"Callback processing error: {e}", exc_info=True)
@@ -315,20 +423,94 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
     return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
 
+@router.post("/paystack/webhook", include_in_schema=False)
+async def paystack_webhook(request: Request, db: Session = Depends(get_db)):
+    """
+    Paystack POSTs card payment events here (Settings → API Keys & Webhooks
+    in the Paystack dashboard). Unlike the M-Pesa callback, every request
+    must carry a valid Paystack signature, so it can't be forged — and the
+    transaction is verified with Paystack again before anything is applied.
+    """
+    payload = await request.body()
+    try:
+        event = paystack_service.verify_webhook(payload, request.headers.get("x-paystack-signature"))
+    except ValueError as e:
+        logger.warning(f"Rejected Paystack webhook: {e}")
+        raise HTTPException(status_code=400, detail="Invalid signature")
+
+    if event.get("event") == "charge.success":
+        reference = (event.get("data") or {}).get("reference")
+        payment = db.query(Payment).filter(Payment.provider_reference == reference).first() if reference else None
+        if not payment:
+            logger.warning(f"Paystack webhook for unknown reference {reference}")
+        elif payment.status == PaymentStatus.INITIATED:
+            try:
+                txn = await run_in_threadpool(paystack_service.verify_transaction, reference)
+            except PaystackError as e:
+                # Not 200, so Paystack retries the webhook later.
+                logger.warning(f"Couldn't verify Paystack transaction {reference}: {e}")
+                raise HTTPException(status_code=502, detail="Couldn't verify the transaction")
+            _settle_card_transaction(db, payment, txn)
+    return {"received": True}
+
+
+def _own_payment(db: Session, payment_id: str, user: User) -> Payment:
+    payment = (
+        db.query(Payment)
+        .filter(Payment.id == payment_id, Payment.user_id == user.id)
+        .first()
+    )
+    if not payment:
+        raise HTTPException(status_code=404, detail="Payment not found")
+    return payment
+
+
 @router.get("/{payment_id}/status", response_model=PaymentStatusOut)
 def get_payment_status(
     payment_id: str,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Poll payment status — used by the frontend while waiting for M-Pesa confirmation."""
-    payment = (
-        db.query(Payment)
-        .filter(Payment.id == payment_id, Payment.user_id == current_user.id)
-        .first()
-    )
-    if not payment:
-        raise HTTPException(status_code=404, detail="Payment not found")
+    """Poll payment status — used by the frontend while waiting for M-Pesa
+    confirmation, or after the buyer comes back from Paystack's card page."""
+    payment = _own_payment(db, payment_id, current_user)
+    if payment.method == "card" and payment.status == PaymentStatus.INITIATED and payment.provider_reference:
+        # Ask Paystack rather than wait for the webhook, which may never come
+        # (a laptop isn't reachable from Paystack) or come a little later.
+        try:
+            _settle_card_transaction(db, payment, paystack_service.verify_transaction(payment.provider_reference))
+        except PaystackError as e:
+            logger.warning(f"Couldn't check card payment {payment.id} with Paystack: {e}")
+        db.refresh(payment)
+    return payment
+
+
+@router.post("/{payment_id}/cancel", response_model=PaymentStatusOut)
+def cancel_card_payment(
+    payment_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """The buyer pressed Cancel on Paystack's card page, which sends them
+    back here: release the pending tickets. If they had in fact paid (e.g.
+    in another tab), that wins and the payment succeeds. Paystack has no way
+    to close a payment page, so a payment made on it after this is logged
+    for a manual refund (see _settle_card_transaction)."""
+    payment = _own_payment(db, payment_id, current_user)
+    if payment.method != "card":
+        raise HTTPException(status_code=400, detail="Only a card payment can be cancelled")
+    if payment.status != PaymentStatus.INITIATED:
+        return payment
+    try:
+        txn = paystack_service.verify_transaction(payment.provider_reference)
+    except PaystackError as e:
+        raise HTTPException(status_code=502, detail=f"Couldn't reach Paystack to cancel: {e}")
+    _settle_card_transaction(db, payment, txn)
+    db.refresh(payment)
+    if payment.status == PaymentStatus.INITIATED and _claim(db, payment):
+        _handle_payment_failure(db, payment, "You cancelled the card payment.")
+        db.commit()
+        db.refresh(payment)
     return payment
 
 
@@ -357,13 +539,10 @@ def dev_confirm_payment(
     if not flag_on(db, "simulated_payments"):
         raise HTTPException(status_code=403, detail="Simulated payments are switched off. Complete the M-Pesa prompt instead.")
 
-    payment = (
-        db.query(Payment)
-        .filter(Payment.id == payment_id, Payment.user_id == current_user.id)
-        .first()
-    )
-    if not payment:
-        raise HTTPException(status_code=404, detail="Payment not found")
+    payment = _own_payment(db, payment_id, current_user)
+    if payment.method == "card":
+        # Paystack's test mode already is the simulation: card 4084 0840 8408 4081.
+        raise HTTPException(status_code=400, detail="This is a card payment. Finish it on Paystack's page instead.")
     if payment.status != PaymentStatus.INITIATED:
         raise HTTPException(status_code=400, detail=f"Payment already {payment.status.value}")
 
@@ -373,12 +552,8 @@ def dev_confirm_payment(
 
     if tickets:
         logger.info(f"[DEV] Payment {payment.id} manually confirmed. {len(tickets)} ticket(s) activated.")
-        for ticket in tickets:
-            mint_ticket_nft.delay(ticket.id)
     elif transfer:
         logger.info(f"[DEV] Resale payment {payment.id} manually confirmed. Transfer {transfer.id} paid.")
-        settle_resale_transfer.delay(transfer.id)
-    if (tickets or transfer) and settings.EMAIL_CONFIGURED:
-        send_payment_receipt.delay(payment.id)
+    _after_success(payment, tickets, transfer)
 
     return payment
