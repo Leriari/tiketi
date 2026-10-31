@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { CalendarPlus, Radio } from "lucide-react";
+import { CalendarPlus, Radio, Clock, ShieldAlert } from "lucide-react";
 import { api, ApiError } from "../../api";
 import { useApiData } from "../../lib/useApiData";
 import { useAuth } from "../../context/AuthContext";
@@ -142,6 +142,39 @@ function CompTicketPanel({ events }) {
   );
 }
 
+/** A new organisation is reviewed by ChainTix (Admin → Organiser Accounts). */
+function ReviewNotice() {
+  const { activeOrganisation } = useAuth();
+  const status = activeOrganisation?.verificationStatus;
+  if (status === "pending") {
+    return (
+      <Card className="flex items-start gap-3 border-warning/30 bg-warning-bg">
+        <Clock size={18} className="flex-none mt-0.5 text-warning" aria-hidden="true" />
+        <div className="text-body-sm text-ink-secondary">
+          <p className="font-semibold text-ink-primary">ChainTix is reviewing {activeOrganisation.businessName}</p>
+          <p>
+            You can set up events and your team now. If an event needs ChainTix's approval before it goes on sale, it shows
+            as <span className="font-medium">in review</span> under Events. Add your <Link to="/organiser/profile" className="underline">contact details</Link> and{" "}
+            <Link to="/organiser/payouts" className="underline">payout details</Link> to speed things up.
+          </p>
+        </div>
+      </Card>
+    );
+  }
+  if (status === "rejected") {
+    return (
+      <Card className="flex items-start gap-3 border-danger/30 bg-danger-bg">
+        <ShieldAlert size={18} className="flex-none mt-0.5 text-danger" aria-hidden="true" />
+        <p className="text-body-sm text-ink-secondary">
+          <span className="font-semibold text-ink-primary">ChainTix couldn't verify {activeOrganisation.businessName}.</span>{" "}
+          Its events can't go on sale. Contact ChainTix support if you think this is a mistake.
+        </p>
+      </Card>
+    );
+  }
+  return null;
+}
+
 export default function ControlCenter() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -155,6 +188,8 @@ export default function ControlCenter() {
           Drop New Event
         </Button>
       </div>
+
+      <ReviewNotice />
 
       {error ? (
         <ErrorState description={error} onRetry={retry} />

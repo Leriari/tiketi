@@ -89,6 +89,10 @@ def health_check(db: Session = Depends(get_db)):
         # Allowed by this server (ALLOW_SIMULATED_PAYMENTS) and not switched
         # off by an admin (Feature Flags).
         "simulated_payments": settings.simulated_payments and flag_on(db, "simulated_payments"),
+        # Whether checkout offers "Pay by card" (Paystack).
+        "card_payments": settings.PAYSTACK_CONFIGURED,
+        # Test-mode key: checkout tells testers Paystack's test card number.
+        "card_test_mode": settings.PAYSTACK_SECRET_KEY.startswith("sk_test_"),
         # Firebase web config — public by design (it identifies the project,
         # it doesn't authorise anything). The login screen uses Firebase for
         # phone codes and Google sign-in only when this is present.

@@ -414,9 +414,14 @@ export default function Profile() {
             </RolePanel>
           )}
           {!usingMockBackend && organisations.length === 0 && (
-            <Card className="flex flex-col justify-center gap-1 border-dashed">
+            <Card className="flex flex-col justify-center gap-2 border-dashed">
               <span className="text-body-sm font-semibold text-ink-primary">Run events?</span>
-              <span className="text-caption text-ink-tertiary">Ask an organisation owner to add you to their team, and their console appears here.</span>
+              <span className="text-caption text-ink-tertiary">
+                Register your organisation to sell tickets on ChainTix. Joining someone else's team instead? Ask its owner to add you.
+              </span>
+              <Button size="sm" variant="secondary" className="w-auto self-start px-4" onClick={() => navigate("/organiser/register")}>
+                Become an organiser
+              </Button>
             </Card>
           )}
         </div>

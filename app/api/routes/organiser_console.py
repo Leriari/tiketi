@@ -584,7 +584,7 @@ def ticket_central(
 
 @router.get("/audit-lookup")
 def audit_lookup(organization_id: str, q: str = "", _m: OrganizerMember = Depends(read_access), db: Session = Depends(get_db)):
-    """Find tickets by ticket ID, holder phone, or M-Pesa receipt number."""
+    """Find tickets by ticket ID, holder phone, M-Pesa receipt number, or Paystack reference."""
     needle = q.strip()
     if not needle:
         return []
@@ -604,7 +604,9 @@ def audit_lookup(organization_id: str, q: str = "", _m: OrganizerMember = Depend
         for t in owners[:50]:
             matches[t.id] = t
 
-    payment = db.query(Payment).filter(Payment.mpesa_receipt_number.ilike(needle)).first()
+    payment = db.query(Payment).filter(
+        Payment.mpesa_receipt_number.ilike(needle) | Payment.provider_reference.ilike(needle)
+    ).first()
     if payment:
         for t in db.query(Ticket).filter(
             ((Ticket.id == payment.ticket_id) | (Ticket.group_payment_id == payment.id)),
@@ -898,16 +900,16 @@ def _export_rows(db: Session, organization_id: str, export_type: str, events: li
     events = events if events is not None else _events(db, organization_id)
     event_ids = [e.id for e in events]
     if export_type == "ticket_sales":
-        header = ["ticket_id", "event", "tier", "status", "complimentary", "price_kes", "purchased_at", "mpesa_receipt", "holder", "nft_token_id"]
+        header = ["ticket_id", "event", "tier", "status", "complimentary", "price_kes", "purchased_at", "payment_reference", "holder", "nft_token_id"]
         rows = []
         for t in _tickets(db, event_ids):
             if t.status == TicketStatus.PENDING_PAYMENT:
                 continue
             original = t.payments[0] if t.payments else None
-            receipt = original.mpesa_receipt_number if original else None
+            receipt = original.reference if original else None
             if not receipt and t.group_payment_id:
                 gp = db.query(Payment).filter(Payment.id == t.group_payment_id).first()
-                receipt = gp.mpesa_receipt_number if gp else None
+                receipt = gp.reference if gp else None
             rows.append([
                 t.id, t.event.title if t.event else "", t.tier.tier_name if t.tier else "", t.status.value,
                 "yes" if t.is_complimentary else "no", 0 if t.is_complimentary else (t.tier.price_kes if t.tier else ""),

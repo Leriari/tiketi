@@ -67,7 +67,7 @@ export function AuthProvider({ children }) {
     try {
       const [me, organisations] = await Promise.all([api.me(), api.getMyOrganisations()]);
       setRoles({
-        organisations: organisations.map((o) => ({ id: o.id, businessName: o.business_name, role: o.role })),
+        organisations: organisations.map((o) => ({ id: o.id, businessName: o.business_name, role: o.role, verificationStatus: o.verification_status })),
         isPlatformAdmin: Boolean(me.is_platform_admin),
         googleLinked: Boolean(me.google_linked),
         email: me.email || null,

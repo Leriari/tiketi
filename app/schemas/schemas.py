@@ -1,5 +1,6 @@
 from pydantic import BaseModel, Field, field_validator, model_validator
 from datetime import datetime
+import re
 from typing import Optional
 import phonenumbers
 
@@ -289,7 +290,9 @@ class TicketOut(BaseModel):
 
 class PurchaseRequest(BaseModel):
     event_id: str
-    phone_number: str  # phone to charge via M-Pesa
+    # "mpesa" (an STK push to phone_number) or "card" (Paystack Checkout).
+    method: str = "mpesa"
+    phone_number: Optional[str] = None  # phone to charge via M-Pesa; not needed for a card
     # Optional — omitted requests resolve to the event's only/first tier (Phase 1).
     # Becomes meaningful once events can have multiple tiers (Phase 2).
     tier_id: Optional[str] = None
@@ -298,7 +301,20 @@ class PurchaseRequest(BaseModel):
     @field_validator("phone_number")
     @classmethod
     def validate_phone(cls, v):
-        return normalize_kenyan_phone(v)
+        return normalize_kenyan_phone(v) if v else None
+
+    @field_validator("method")
+    @classmethod
+    def known_method(cls, v):
+        if v not in ("mpesa", "card"):
+            raise ValueError("method must be 'mpesa' or 'card'")
+        return v
+
+    @model_validator(mode="after")
+    def mpesa_needs_a_phone(self):
+        if self.method == "mpesa" and not self.phone_number:
+            raise ValueError("Enter the M-Pesa number to charge.")
+        return self
 
     @field_validator("quantity")
     @classmethod
@@ -314,7 +330,9 @@ class PurchaseResponse(BaseModel):
     ticket_id: str  # the first/primary ticket — kept for backward compatibility
     ticket_ids: list[str]  # every ticket this purchase created (length == quantity)
     payment_id: str
-    checkout_request_id: str
+    method: str = "mpesa"
+    checkout_request_id: Optional[str] = None  # M-Pesa
+    checkout_url: Optional[str] = None  # card: Paystack's payment page, to send the buyer to
     message: str = "STK push sent. Confirm payment on your phone."
 
 
@@ -328,7 +346,10 @@ class PaymentStatusOut(BaseModel):
     payment_id: str = None  # alias for id
     status: str
     failure_reason: Optional[str] = None
+    method: str = "mpesa"
+    ticket_id: Optional[str] = None  # the first ticket, for the confirmation page after Paystack sends the buyer back
     mpesa_receipt_number: Optional[str]
+    paid_with: Optional[str] = None  # "M-Pesa OEI2AK4MFU" or "Visa •••• 4242"
     amount_kes: float
     initiated_at: datetime
     confirmed_at: Optional[datetime]
@@ -404,8 +425,51 @@ class ResaleWithdrawRequest(BaseModel):
 
 # ─── Organisations (Work Order 04 B2) ─────────────────────────────────────────
 
+_ORG_EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
 class OrganisationCreate(BaseModel):
+    """Registering as an organiser. Only the name is required; the contact
+    details are what ChainTix uses to reach the organisation while it
+    reviews it, and can be changed later on the console's Profile page."""
     business_name: str
+    contact_email: Optional[str] = None
+    contact_phone: Optional[str] = None
+    kra_pin: Optional[str] = None
+
+    @field_validator("business_name")
+    @classmethod
+    def sensible_name(cls, v):
+        v = " ".join(v.split())
+        if not 2 <= len(v) <= 120:
+            raise ValueError("The organisation name must be 2-120 characters.")
+        return v
+
+    @field_validator("contact_email")
+    @classmethod
+    def valid_email(cls, v):
+        v = (v or "").strip().lower()
+        if not v:
+            return None
+        if len(v) > 255 or not _ORG_EMAIL.match(v):
+            raise ValueError("Enter a valid email address, e.g. events@example.com.")
+        return v
+
+    @field_validator("contact_phone")
+    @classmethod
+    def validate_phone(cls, v):
+        return normalize_kenyan_phone(v) if v and v.strip() else None
+
+    @field_validator("kra_pin")
+    @classmethod
+    def valid_kra_pin(cls, v):
+        v = (v or "").strip().upper()
+        if not v:
+            return None
+        # KRA PINs are a letter, nine digits and a letter: P051234567X.
+        if not re.fullmatch(r"[A-Z]\d{9}[A-Z]", v):
+            raise ValueError("A KRA PIN looks like P051234567X.")
+        return v
 
 
 class OrganisationOut(BaseModel):

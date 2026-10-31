@@ -7,7 +7,7 @@ This sets up a free public deployment, good until January and beyond:
 | Website | Firebase Hosting, `https://tiketi-6e9fd.web.app` | free (Spark plan) |
 | API, worker, database, Redis | One Oracle Cloud "Always Free" server, run with Docker | free, permanently |
 | HTTPS for the API | Caddy and Let's Encrypt, on a free `sslip.io` hostname | free |
-| Payments | M-Pesa **Daraja sandbox** (no real money) | free |
+| Payments | M-Pesa **Daraja sandbox**, plus cards in Paystack **test mode** (no real money either way) | free |
 | Tickets on-chain | Base **Sepolia** testnet | free (test ETH) |
 | Login | Google, through Firebase; phone codes only for 3 demo numbers | free |
 
@@ -150,6 +150,32 @@ Gmail password is never used.
 
 Gmail allows about 500 emails a day. Leave `SMTP_PASSWORD` empty and the
 site simply doesn't send email.
+
+## Card payments (Paystack)
+
+Checkout offers **Pay by card** once a Paystack key is set. Buyers pay on
+Paystack's own page, so card numbers never reach the server. Use **test
+mode**: no real money moves, and anyone can pay with the test card
+4084 0840 8408 4081, expiry 10/27, CVV 408.
+
+1. Sign up at https://dashboard.paystack.com/#/signup with Kenya as the
+   country. Test mode works straight away; real payments only need the
+   business activated later.
+2. Go to **Settings → API Keys & Webhooks**. Copy the **Test Secret Key**
+   (`sk_test_…`).
+3. On the same page, set **Test Webhook URL** to
+   `https://<PUBLIC-IP-WITH-DASHES>.sslip.io/api/v1/payments/paystack/webhook`
+   and save. Leave Test Callback URL empty; ChainTix sends its own with
+   each payment.
+4. In `deploy/.env.production` on your PC, fill in
+   `PAYSTACK_SECRET_KEY=sk_test_…`.
+5. Copy the file to the server (step 3's `scp`), then on the server run
+   `cd ~/tiketi/deploy && ./up.sh`.
+
+Paystack emails the buyer its own card receipt, so paying by card needs an
+email address on the buyer's profile. Locally, only `PAYSTACK_SECRET_KEY` in
+`.env` is needed: when the buyer comes back from Paystack, checkout asks
+Paystack directly whether they paid.
 
 ## 5. Make yourself platform admin
 

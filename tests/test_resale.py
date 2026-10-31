@@ -33,16 +33,24 @@ def _login(phone: str) -> dict:
     return {"Authorization": f"Bearer {res.json()['access_token']}"}
 
 
+_orgs_by_user: dict[str, str] = {}
+
+
 def _create_event(headers: dict, **overrides) -> dict:
-    """Creates a fresh throwaway organisation per call (Work Order 04 B3 —
-    every event now belongs to one) rather than threading an org id through
-    every one of this file's ~15 call sites, none of which care which
-    organisation owns the event, only that the same `headers` user owns it."""
-    org_res = client.post("/api/v1/organisations/", json={"business_name": "Resale Test Org"}, headers=headers)
-    assert org_res.status_code == 201, org_res.text
+    """Creates a throwaway organisation for each user the first time (Work
+    Order 04 B3 — every event now belongs to one) rather than threading an
+    org id through every one of this file's ~15 call sites, none of which
+    care which organisation owns the event, only that the same `headers`
+    user owns it. One per user, not per call: registering organisations is
+    rate-limited per user."""
+    user_id = client.get("/api/v1/auth/me", headers=headers).json()["id"]
+    if user_id not in _orgs_by_user:
+        org_res = client.post("/api/v1/organisations/", json={"business_name": "Resale Test Org"}, headers=headers)
+        assert org_res.status_code == 201, org_res.text
+        _orgs_by_user[user_id] = org_res.json()["id"]
 
     payload = {
-        "organization_id": org_res.json()["id"],
+        "organization_id": _orgs_by_user[user_id],
         "title": "Resale Test Event",
         "venue": "Test Venue",
         "event_date": "2027-06-01T18:00:00",

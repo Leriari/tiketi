@@ -217,7 +217,9 @@ function PaymentCard({ ticketId, payment, receiptEmail }) {
       </h2>
       <DetailRow label="Paid" value={<MoneyText value={payment.amount_kes} />} />
       {payment.quantity > 1 && <DetailRow label="Order" value={`${payment.quantity} tickets`} />}
-      <DetailRow label="M-Pesa receipt" value={payment.mpesa_receipt || "—"} />
+      {payment.method === "card"
+        ? <DetailRow label="Card" value={payment.paid_with || "Card"} />
+        : <DetailRow label="M-Pesa receipt" value={payment.mpesa_receipt || "—"} />}
       <DetailRow label="Date" value={when(payment.paid_at)} />
       {receiptEmail && (
         <button

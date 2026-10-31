@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { Search, MapPin, Flame, Smartphone, ShieldCheck } from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
+import { Search, MapPin, Flame, Smartphone, ShieldCheck, CalendarPlus } from "lucide-react";
 import { api } from "../../api";
 import { useApiData } from "../../lib/useApiData";
 import { Select, Badge, Skeleton, ErrorState, MoneyText } from "../../components/ui";
@@ -92,11 +92,14 @@ export default function Landing() {
 
           <div className="flex flex-col sm:flex-row gap-4 pt-2">
             <div className="flex items-center gap-2 text-body-sm text-ink-secondary">
-              <Smartphone size={16} className="text-brand-primary flex-none" /> Pay with M-Pesa — no card, no crypto wallet.
+              <Smartphone size={16} className="text-brand-primary flex-none" /> Pay with M-Pesa or card — no crypto wallet needed.
             </div>
             <div className="flex items-center gap-2 text-body-sm text-ink-secondary">
               <ShieldCheck size={16} className="text-chain-verified flex-none" /> Every ticket is cryptographically verified.
             </div>
+            <Link to="/organiser/register" className="flex items-center gap-2 text-body-sm text-ink-secondary underline-offset-2 hover:underline hover:text-ink-primary">
+              <CalendarPlus size={16} className="text-brand-primary flex-none" /> Organising an event? Sell tickets here.
+            </Link>
           </div>
         </div>
       </section>

@@ -36,6 +36,16 @@ class Settings(BaseSettings):
             return "https://api.safaricom.co.ke"
         return "https://sandbox.safaricom.co.ke"
 
+    # Card payments through Paystack Checkout (optional). The secret key is
+    # from the Paystack dashboard → Settings → API Keys & Webhooks; use the
+    # test key (sk_test_…) for the demo. It also verifies webhooks, sent to
+    # <API>/payments/paystack/webhook. Unset: no card option at checkout.
+    PAYSTACK_SECRET_KEY: str = ""
+
+    @property
+    def PAYSTACK_CONFIGURED(self) -> bool:
+        return bool(self.PAYSTACK_SECRET_KEY)
+
     # Firebase Authentication (optional): real SMS codes for phone login,
     # plus Google sign-in. Values from Firebase console -> Project settings
     # -> General -> "Your apps" (web app config). None of these are secrets —

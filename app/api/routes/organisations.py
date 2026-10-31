@@ -16,9 +16,14 @@ from app.schemas.schemas import (
 )
 from app.core.dependencies import get_current_user
 from app.core.authz import require_org_role
+from app.core.rate_limit import enforce_rate_limit
 from app.services.auth_service import get_or_create_user
 
 router = APIRouter(prefix="/organisations", tags=["Organisations"])
+
+# Anyone signed in can register an organisation; this only stops a script
+# from flooding the admins' review queue.
+_CREATE_LIMIT = (10, 3600)
 
 
 def _member_out(member: OrganizerMember) -> MemberOut:
@@ -38,8 +43,17 @@ def create_organisation(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """Create an organisation. The creating user becomes its OWNER."""
-    org = Organizer(business_name=body.business_name, verification_status=OrganizerVerificationStatus.PENDING)
+    """Create an organisation (the website's "Become an organiser" page).
+    The creating user becomes its OWNER; it starts PENDING until a platform
+    admin reviews it in the Admin console."""
+    enforce_rate_limit(f"org-create:user:{current_user.id}", *_CREATE_LIMIT)
+    org = Organizer(
+        business_name=body.business_name,
+        verification_status=OrganizerVerificationStatus.PENDING,
+        contact_email=body.contact_email or current_user.email,
+        contact_phone=body.contact_phone or current_user.phone_number,
+        kra_pin=body.kra_pin,
+    )
     db.add(org)
     db.flush()
 

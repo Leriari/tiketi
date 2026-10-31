@@ -47,7 +47,8 @@ export function RequireOrgMembership() {
   if (!isAuthed) return <RequireLogin returnPath={location.pathname + location.search} />;
   if (!rolesLoaded) return null;
   if (roles.organisations.length === 0) {
-    return <Unauthorised message="You need to belong to an organisation to access the Organiser Console." />;
+    // Not in an organisation yet: offer to register one rather than a dead end.
+    return <Navigate to="/organiser/register" replace />;
   }
   return <Outlet />;
 }
