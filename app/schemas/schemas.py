@@ -407,13 +407,8 @@ class ResaleBuyRequest(BaseModel):
 
 
 class ResaleWithdrawRequest(BaseModel):
-    amount_kes: float
-    phone_number: str
-
-    @field_validator("phone_number")
-    @classmethod
-    def validate_phone(cls, v):
-        return normalize_kenyan_phone(v)
+    # Always to the account's own M-Pesa number, so there's no phone here.
+    amount_kes: float = Field(gt=0)
 
     @field_validator("amount_kes")
     @classmethod
@@ -635,22 +630,56 @@ class OrganisationProfileUpdate(BaseModel):
 
 
 class PayoutDetailsUpdate(BaseModel):
+    """Where an organisation's payouts go: an M-Pesa number, a paybill and
+    account number (a bank is paid through its paybill), or a till."""
     payoutMethod: str
     payoutDestination: str
+    payoutAccount: Optional[str] = None
+    payoutLabel: Optional[str] = Field(default=None, max_length=100)
 
     @field_validator("payoutMethod")
     @classmethod
     def valid_method(cls, v):
-        if v not in ("mpesa", "bank"):
-            raise ValueError("payoutMethod must be 'mpesa' or 'bank'")
+        if v not in ("mpesa", "paybill", "till"):
+            raise ValueError("payoutMethod must be 'mpesa', 'paybill' or 'till'")
         return v
 
-    @field_validator("payoutDestination")
+    @model_validator(mode="after")
+    def valid_destination(self):
+        dest = re.sub(r"[\s-]", "", self.payoutDestination or "")
+        if self.payoutMethod == "mpesa":
+            self.payoutDestination = normalize_kenyan_phone(dest)
+            self.payoutAccount = None
+        else:
+            if not re.fullmatch(r"\d{5,7}", dest):
+                raise ValueError(f"A {self.payoutMethod} number is 5 to 7 digits")
+            self.payoutDestination = dest
+            account = (self.payoutAccount or "").strip()
+            if self.payoutMethod == "paybill":
+                if not re.fullmatch(r"[A-Za-z0-9-]{1,20}", account):
+                    raise ValueError("Enter the paybill account number (letters and digits, up to 20)")
+                self.payoutAccount = account
+            else:
+                self.payoutAccount = None
+        self.payoutLabel = (self.payoutLabel or "").strip() or None
+        return self
+
+
+class PayoutAmountRequest(BaseModel):
+    amount_kes: float = Field(gt=0)
+
+
+class PayoutReceiptRequest(BaseModel):
+    """The M-Pesa receipt of a payout an admin made by hand."""
+    receipt: str
+
+    @field_validator("receipt")
     @classmethod
-    def destination_required(cls, v):
-        if not v.strip():
-            raise ValueError("A payout destination is required")
-        return v.strip()
+    def valid_receipt(cls, v):
+        v = v.strip().upper()
+        if not re.fullmatch(r"[A-Z0-9]{8,20}", v):
+            raise ValueError("Enter the M-Pesa receipt, e.g. SG632NMUAB")
+        return v
 
 
 class ExportRequest(BaseModel):

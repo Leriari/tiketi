@@ -8,6 +8,7 @@ const TONE = {
 };
 
 const SIZE = {
+  caption: "text-caption",
   body: "text-body",
   h3: "text-h3 font-semibold",
   metric: "text-metric font-bold",

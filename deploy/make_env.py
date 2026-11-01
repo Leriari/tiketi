@@ -100,6 +100,11 @@ def main():
         ("", None),
         ("# Card payments — Paystack test mode (DEPLOY.md). Leave empty for M-Pesa only.", None),
         ("PAYSTACK_SECRET_KEY", keep("PAYSTACK_SECRET_KEY")),
+        ("", None),
+        ("# Payouts by M-Pesa B2C/B2B (DEPLOY.md). Leave empty and an admin pays each by hand.", None),
+        ("MPESA_PAYOUT_SHORTCODE", keep("MPESA_PAYOUT_SHORTCODE")),
+        ("MPESA_INITIATOR_NAME", keep("MPESA_INITIATOR_NAME")),
+        ("MPESA_SECURITY_CREDENTIAL", keep("MPESA_SECURITY_CREDENTIAL")),
     ]
     lines = [k if v is None else f"{k}={v}" for k, v in values]
     OUT.write_text("\n".join(lines) + "\n", encoding="utf-8")

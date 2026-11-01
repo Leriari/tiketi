@@ -1,6 +1,7 @@
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from functools import lru_cache
+from urllib.parse import urlsplit
 
 
 class Settings(BaseSettings):
@@ -35,6 +36,30 @@ class Settings(BaseSettings):
         if self.MPESA_ENV == "production":
             return "https://api.safaricom.co.ke"
         return "https://sandbox.safaricom.co.ke"
+
+    # M-Pesa payouts (optional): B2C to phones, B2B to paybills and tills.
+    # From the Daraja portal: the shortcode money is sent from, its API
+    # operator ("initiator") name, and that operator's password encrypted
+    # with Safaricom's certificate (the portal's "Security Credential"
+    # generator does this). Sandbox values are on its Test Credentials page.
+    # Unset: payouts still work, but an admin pays each one by hand and
+    # records the M-Pesa receipt (app/services/payouts.py).
+    MPESA_PAYOUT_SHORTCODE: str = ""
+    MPESA_INITIATOR_NAME: str = ""
+    MPESA_SECURITY_CREDENTIAL: str = ""
+
+    @property
+    def MPESA_PAYOUTS_CONFIGURED(self) -> bool:
+        return bool(self.MPESA_CONSUMER_KEY and self.MPESA_PAYOUT_SHORTCODE
+                    and self.MPESA_INITIATOR_NAME and self.MPESA_SECURITY_CREDENTIAL)
+
+    @property
+    def PAYOUT_RESULT_BASE_URL(self) -> str:
+        """Where Safaricom sends payout results: this API's own address,
+        taken from MPESA_CALLBACK_URL (same server). Daraja refuses result
+        URLs containing words like "query", so nothing below uses them."""
+        parts = urlsplit(self.MPESA_CALLBACK_URL)
+        return f"{parts.scheme}://{parts.netloc}/api/v1/payouts/results"
 
     # Card payments through Paystack Checkout (optional). The secret key is
     # from the Paystack dashboard → Settings → API Keys & Webhooks; use the

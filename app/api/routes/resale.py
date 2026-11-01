@@ -26,12 +26,15 @@ from app.db.session import get_db
 from app.models.models import (
     Ticket, TicketStatus, Transfer, TransferStatus, TransferType,
     Payment, PaymentStatus, WalletTransaction, WalletTransactionType,
-    WalletTransactionStatus, User, AuditLog, EventStatus,
+    WalletTransactionStatus, User, AuditLog, EventStatus, Payout, PayoutStatus,
 )
 from app.schemas.schemas import (
     ResaleListingCreate, ResaleRepriceRequest, ResaleBuyRequest, ResaleWithdrawRequest,
 )
+from app.core.config import get_settings
+from app.core.constants import PAYOUT_CHARGE_BANDS
 from app.services import mpesa as mpesa_service
+from app.services import payouts as payout_service
 from app.services import web3_service
 from app.core.dependencies import get_current_user
 from app.services import organiser_service
@@ -257,7 +260,8 @@ def _compute_wallet(db: Session, user_id: str) -> dict:
     pending = 0.0
     for t in _wallet_transactions(db, user_id):
         if t.type == WalletTransactionType.WITHDRAWAL:
-            available += t.amount_kes  # stored negative already
+            if t.status != WalletTransactionStatus.FAILED:  # a failed withdrawal's money is back
+                available += t.amount_kes  # stored negative already
         elif t.available_at and t.available_at <= now:
             available += t.amount_kes
         else:
@@ -265,7 +269,8 @@ def _compute_wallet(db: Session, user_id: str) -> dict:
     return {"available": available, "pending": pending, "onHold": 0.0}
 
 
-def _serialize_wallet_transaction(t: WalletTransaction, include_available_at: bool) -> dict:
+def _serialize_wallet_transaction(t: WalletTransaction, include_available_at: bool,
+                                  payouts: dict[str, Payout] | None = None) -> dict:
     row = {
         "id": t.id,
         "type": t.type.value,
@@ -276,7 +281,16 @@ def _serialize_wallet_transaction(t: WalletTransaction, include_available_at: bo
     }
     if include_available_at:
         row["available_at"] = t.available_at
+    payout = (payouts or {}).get(t.id)
+    if payout:
+        row["payout"] = payout_service.serialize(payout)
     return row
+
+
+def _withdrawal_payouts(db: Session, user_id: str) -> dict[str, Payout]:
+    """Each withdrawal's Payout, by its wallet transaction id."""
+    rows = db.query(Payout).filter(Payout.user_id == user_id, Payout.recipient_type == "seller").all()
+    return {p.wallet_transaction_id: p for p in rows if p.wallet_transaction_id}
 
 
 # ── Eligible tickets / listing creation ─────────────────────────────────────
@@ -641,45 +655,49 @@ def seller_dashboard(db: Session = Depends(get_db), current_user: User = Depends
 def get_wallet(db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     wallet = _compute_wallet(db, current_user.id)
     transactions = _wallet_transactions(db, current_user.id)
+    payouts = _withdrawal_payouts(db, current_user.id)
     return {
         "available": wallet["available"],
         "pending": wallet["pending"],
         "onHold": wallet["onHold"],
         "minWithdrawalKes": current_fees(db).min_payout_kes,
-        "transactions": [_serialize_wallet_transaction(t, include_available_at=True) for t in transactions],
+        # Withdrawals go to the account's own M-Pesa number.
+        "withdrawalPhone": current_user.phone_number,
+        # True: sent by M-Pesa straight away. False: an admin pays it by hand.
+        "instantWithdrawals": get_settings().MPESA_PAYOUTS_CONFIGURED,
+        # M-Pesa's charge per withdrawal, taken off the amount: [[up to KES, charge], ...].
+        "transferCharges": [list(band) for band in PAYOUT_CHARGE_BANDS],
+        "transactions": [_serialize_wallet_transaction(t, include_available_at=True, payouts=payouts) for t in transactions],
     }
 
 
 @router.post("/withdraw")
-def withdraw_to_mpesa(
+async def withdraw_to_mpesa(
     body: ResaleWithdrawRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """
-    Real B2C M-Pesa payouts (Daraja's business-to-customer API) are not
-    integrated — out of this work order's scope, and the mock this matches
-    doesn't model one either (its own withdrawToMpesa is synchronous and
-    always succeeds). This records the withdrawal for real; the actual
-    money movement to a seller's phone is not implemented.
+    Withdraw any amount of the available balance to the seller's own M-Pesa
+    number. With M-Pesa payouts set up, it goes out by B2C straight away;
+    otherwise an admin pays it (app/services/payouts.py). The money leaves
+    the balance now and comes back if the payout fails.
     """
-    min_payout = current_fees(db).min_payout_kes
-    if body.amount_kes < min_payout:
-        raise HTTPException(status_code=400, detail=f"Minimum withdrawal is KES {int(min_payout)}.")
+    # Lock the seller's row so two withdrawals at once can't both pass the
+    # balance check (Postgres; SQLite has no row locks and runs one writer).
+    user = db.query(User).filter(User.id == current_user.id).with_for_update().one()
+    wallet = _compute_wallet(db, user.id)
+    try:
+        payout_service.check_amount(body.amount_kes, wallet["available"], current_fees(db).min_payout_kes)
+    except payout_service.PayoutError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
-    wallet = _compute_wallet(db, current_user.id)
-    if body.amount_kes > wallet["available"]:
-        raise HTTPException(status_code=400, detail="That's more than your available balance.")
-
-    db.add(WalletTransaction(
-        user_id=current_user.id,
-        type=WalletTransactionType.WITHDRAWAL,
-        description=f"Withdrawal to M-Pesa · {body.phone_number}",
-        amount_kes=-round(body.amount_kes),
-        status=WalletTransactionStatus.SUCCESS,
-    ))
+    payout = payout_service.create_seller_withdrawal(db, user, body.amount_kes)
     db.commit()
-    return {"success": True}
+    if payout.status == PayoutStatus.PROCESSING:
+        await payout_service.send(db, payout)
+    db.refresh(payout)
+    return payout_service.serialize(payout)
 
 
 @router.get("/disputes")

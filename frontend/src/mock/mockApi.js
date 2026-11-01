@@ -403,6 +403,9 @@ function listingSummary(listing) {
   };
 }
 
+// Mirrors app/core/constants.py PAYOUT_CHARGE_BANDS.
+const MOCK_TRANSFER_CHARGES = [[1500, 5], [5000, 9], [20000, 11], [250000, 13]];
+
 function computeWallet(userId) {
   const txs = db.walletTransactions.filter((t) => t.user_id === userId).sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
   let available = 0;
@@ -1352,6 +1355,9 @@ export const mockApi = {
       pending: w.pending,
       onHold: w.onHold,
       minWithdrawalKes: MIN_WITHDRAWAL_KES,
+      withdrawalPhone: findUserById(userId)?.phone_number || null,
+      instantWithdrawals: true,
+      transferCharges: MOCK_TRANSFER_CHARGES,
       transactions: w.transactions.map((t) => ({
         id: t.id,
         type: t.type,
@@ -1364,8 +1370,9 @@ export const mockApi = {
     };
   },
 
-  withdrawToMpesa: async ({ amount, phoneNumber }) => {
+  withdrawToMpesa: async ({ amount }) => {
     const userId = requireUser();
+    const phoneNumber = findUserById(userId)?.phone_number || "";
     await delay(600);
     const wallet = computeWallet(userId);
     if (amount < MIN_WITHDRAWAL_KES) throw new ApiError(`Minimum withdrawal is KES ${MIN_WITHDRAWAL_KES}.`, 400);
@@ -1382,7 +1389,7 @@ export const mockApi = {
       available_at: null,
     });
     save();
-    return { success: true };
+    return { status: "paid", amount_kes: amount, charge_kes: 0, net_kes: amount };
   },
 
   getDisputes: async () => {
@@ -1435,17 +1442,29 @@ export const mockApi = {
   getPayoutDetails: async () => {
     requireUser();
     await delay(200);
-    return { payoutMethod: db.organiserProfile.payoutMethod, payoutDestination: db.organiserProfile.payoutDestination };
+    const p = db.organiserProfile;
+    return { payoutMethod: p.payoutMethod, payoutDestination: p.payoutDestination, payoutAccount: p.payoutAccount || "", payoutLabel: p.payoutLabel || "" };
   },
 
-  updatePayoutDetails: async ({ payoutMethod, payoutDestination }) => {
+  updatePayoutDetails: async ({ payoutMethod, payoutDestination, payoutAccount, payoutLabel }) => {
     requireUser();
     await delay(350);
-    db.organiserProfile.payoutMethod = payoutMethod;
-    db.organiserProfile.payoutDestination = payoutDestination;
+    Object.assign(db.organiserProfile, { payoutMethod, payoutDestination, payoutAccount: payoutAccount || "", payoutLabel: payoutLabel || "" });
     save();
-    return { success: true };
+    return { payoutMethod, payoutDestination, payoutAccount: payoutAccount || "", payoutLabel: payoutLabel || "" };
   },
+
+  // Organiser payouts need the real backend (an admin approves each one).
+  getOrganiserPayouts: async () => {
+    requireUser();
+    await delay(200);
+    return {
+      available: computeOrganiserWallet().available, minPayoutKes: MIN_WITHDRAWAL_KES,
+      blockedReason: "Payout requests need the real backend.", destination: null,
+      transferCharges: MOCK_TRANSFER_CHARGES, payouts: [],
+    };
+  },
+  requestOrganiserPayout: async () => { throw new ApiError("Payout requests need the real backend.", 400); },
 
   getTeamMembers: async () => {
     requireUser();
@@ -2122,6 +2141,17 @@ export const mockApi = {
     save();
     return { success: true, current: after };
   },
+
+  getPayoutRequests: async () => {
+    requireUser();
+    await delay(200);
+    return { automatic: false, payoutAccountBalance: null, requests: [] };
+  },
+  approvePayout: async () => { throw new ApiError("Payouts need the real backend.", 400); },
+  rejectPayout: async () => { throw new ApiError("Payouts need the real backend.", 400); },
+  markPayoutPaid: async () => { throw new ApiError("Payouts need the real backend.", 400); },
+  markPayoutFailed: async () => { throw new ApiError("Payouts need the real backend.", 400); },
+  checkPayoutStatus: async () => { throw new ApiError("Payouts need the real backend.", 400); },
 
   getPayoutQueue: async () => {
     requireUser();

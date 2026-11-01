@@ -130,6 +130,14 @@ class WalletTransactionStatus(str, enum.Enum):
     FAILED   = "failed"
 
 
+class PayoutStatus(str, enum.Enum):
+    PENDING_APPROVAL = "pending_approval"  # waiting for a finance admin
+    PROCESSING       = "processing"        # sent to Safaricom, waiting for its result
+    PAID             = "paid"
+    FAILED           = "failed"            # Safaricom refused it; the money is back in the balance
+    REJECTED         = "rejected"          # an admin refused it; the money is back in the balance
+
+
 # ─── Models ───────────────────────────────────────────────────────────────────
 
 class User(Base):
@@ -206,12 +214,17 @@ class Organizer(Base):
     )
     mpesa_paybill: Mapped[str | None] = mapped_column(String(20))
     royalty_wallet_address: Mapped[str | None] = mapped_column(String(42))
-    # Organiser Console profile/payout settings. Payout details are stored
-    # only — no automated payout is executed anywhere in this codebase.
+    # Organiser Console profile/payout settings. Where a payout request
+    # (Payout) is sent: an M-Pesa number (B2C), or a paybill plus account
+    # number, or a till (B2B). A bank is paid through its paybill. "bank" is
+    # a legacy value from before payouts existed: it has no paybill, so it
+    # must be updated before the organisation can be paid.
     contact_email: Mapped[str | None] = mapped_column(String(255))
     contact_phone: Mapped[str | None] = mapped_column(String(15))
-    payout_method: Mapped[str | None] = mapped_column(String(20))  # "mpesa" | "bank"
+    payout_method: Mapped[str | None] = mapped_column(String(20))  # "mpesa" | "paybill" | "till"
     payout_destination: Mapped[str | None] = mapped_column(String(50))
+    payout_account: Mapped[str | None] = mapped_column(String(20))  # paybill account number
+    payout_label: Mapped[str | None] = mapped_column(String(100))   # e.g. "Equity Bank"
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
     # Admin review. Suspension is separate from verification_status so that
     # reinstating returns the organisation to whatever it was before.
@@ -737,7 +750,9 @@ class AuditLog(Base):
 class WalletTransaction(Base):
     """
     A seller's earnings ledger (Work Order 02). One row per completed resale
-    payout or M-Pesa withdrawal. No table for this existed in the original
+    payout or M-Pesa withdrawal. A withdrawal's status follows its Payout:
+    pending while it's being sent, failed (and back in the balance) if it
+    didn't go through. No table for this existed in the original
     14-table schema — resale payouts are new money movement this project
     didn't have before, so this is an addition, not a repurposing of an
     unwired table like Transfer was.
@@ -765,6 +780,64 @@ class WalletTransaction(Base):
     )
     available_at: Mapped[datetime | None] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+
+
+class Payout(Base):
+    """
+    Money ChainTix sends out: a seller withdrawing their wallet, or an
+    organiser's payout request. app/services/payouts.py moves it through
+    its stages; Safaricom's B2C API pays an M-Pesa number and its B2B API a
+    paybill or till.
+
+    amount_kes leaves the recipient's balance the moment the payout is
+    created, so the same money can't be requested twice. charge_kes is
+    Safaricom's transfer charge, taken off it, and net_kes is what is sent.
+    A failed or rejected payout gives amount_kes back.
+
+    The destination is copied in at request time, so an admin approves
+    exactly where the money will go.
+    """
+    __tablename__ = "payouts"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    recipient_type: Mapped[str] = mapped_column(String(10), nullable=False)  # "seller" | "organiser"
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False)  # the seller, or who requested it
+    organizer_id: Mapped[str | None] = mapped_column(ForeignKey("organizers.id"), index=True)
+    wallet_transaction_id: Mapped[str | None] = mapped_column(ForeignKey("wallet_transactions.id"))
+
+    channel: Mapped[str] = mapped_column(String(10), nullable=False)  # "mpesa" | "paybill" | "till"
+    destination: Mapped[str] = mapped_column(String(20), nullable=False)
+    account_reference: Mapped[str | None] = mapped_column(String(20))
+    destination_label: Mapped[str | None] = mapped_column(String(100))
+
+    amount_kes: Mapped[float] = mapped_column(Float, nullable=False)
+    charge_kes: Mapped[float] = mapped_column(Float, nullable=False)
+    net_kes: Mapped[float] = mapped_column(Float, nullable=False)
+    status: Mapped[PayoutStatus] = mapped_column(SAEnum(PayoutStatus), nullable=False)
+
+    reviewed_by: Mapped[str | None] = mapped_column(ForeignKey("users.id"))
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime)
+    review_note: Mapped[str | None] = mapped_column(Text)
+
+    # Safaricom's side. originator_conversation_id is ChainTix's own for
+    # B2C (this payout's id, so a resend can never pay twice) and
+    # Safaricom's for B2B.
+    originator_conversation_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    conversation_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    mpesa_receipt: Mapped[str | None] = mapped_column(String(20))
+    recipient_name: Mapped[str | None] = mapped_column(String(255))  # as M-Pesa shows it
+    result_code: Mapped[str | None] = mapped_column(String(20))
+    result_desc: Mapped[str | None] = mapped_column(Text)
+    result_payload: Mapped[dict | None] = mapped_column(JSON)
+    # Paid outside Daraja (e.g. from the M-Pesa business app) and recorded by an admin.
+    manual: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime)
+
+    user: Mapped["User"] = relationship("User", foreign_keys=[user_id])
+    organizer: Mapped["Organizer | None"] = relationship("Organizer")
 
 
 class Notification(Base):

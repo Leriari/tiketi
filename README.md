@@ -68,8 +68,9 @@ those settings.
 The numbers come from real rows, nothing simulated:
 - Earnings are successful primary payments minus the 5% platform fee and a
   KES 10/ticket scanning fee, plus settled resale royalties. They release 4
-  days after the event. Nothing is actually paid out yet, so "total paid
-  out" is always 0.
+  days after the event. The owner then requests a payout of any amount;
+  a finance admin approves it and it goes out by M-Pesa B2C or B2B, or is
+  paid by hand (`app/services/payouts.py`, deploy/DEPLOY.md "Payouts").
 - Crowd control combines online scans, manual overrides and uploaded
   offline scans.
 - Exports and sales statements are CSV, generated on download.

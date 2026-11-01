@@ -5,13 +5,12 @@ scoped to one organisation: /organisations/{organization_id}/...
 Before this, the console ran on the frontend mock only. Every number here is
 computed from real rows (payments, tickets, transfers, attendance, gate
 scanners, the audit log); nothing is simulated. Where the platform simply
-doesn't do something yet, the response says so (e.g. totalPaidOut is 0
-because no payout is ever executed, avg_gas_cost_usd is null because gas
-spend isn't recorded) rather than inventing a figure.
+doesn't do something yet, the response says so (e.g. avg_gas_cost_usd is
+null because gas spend isn't recorded) rather than inventing a figure.
 
 Access: any member (OWNER or STAFF) can read; actions that create value or
-change settings (complimentary tickets, profile, payout details) are
-OWNER-only. Manual admission is a scan, which staff may do.
+change settings (complimentary tickets, profile, payout details, payout
+requests) are OWNER-only. Manual admission is a scan, which staff may do.
 """
 import csv
 import io
@@ -29,16 +28,18 @@ from app.core.crypto import encrypt_secret
 from app.db.session import get_db
 from app.models.models import (
     Attendance, AttendanceStatus, AuditLog, Barcode, BarcodeStatus, Event, EventStatus, GateScanner,
-    GateScannerStatus, Organizer, OrganizerMember, OrganizerRole, Payment, PaymentStatus, Ticket,
+    GateScannerStatus, Organizer, OrganizerMember, OrganizerRole, Payment, PaymentStatus, Payout, Ticket,
     TicketStatus, Transfer, TransferStatus,
 )
 from app.schemas.schemas import (
     ComplimentaryTicketRequest, ConsoleScanRequest, ExportRequest, ManualOverrideRequest, OrganisationProfileUpdate,
-    PayoutDetailsUpdate,
+    PayoutAmountRequest, PayoutDetailsUpdate,
 )
 from app.services import organiser_service
+from app.services import payouts as payout_service
 from app.services.auth_service import get_or_create_user
 from app.services.gate_partitioning import assign_gate
+from app.core.constants import PAYOUT_CHARGE_BANDS
 from app.services.platform_settings import DEFAULT_FEES, FeeHistory, current_fees
 from app.services.totp_service import generate_totp_secret
 from app.worker import mark_ticket_used_onchain, mint_ticket_nft
@@ -193,11 +194,19 @@ def _release_at(rows: list[dict], event: Event) -> datetime:
                default=event.event_date + timedelta(days=DEFAULT_FEES.organiser_escrow_days))
 
 
-def _wallet(rows: list[dict]) -> dict:
+def _wallet(db: Session, organization_id: str, rows: list[dict]) -> dict:
+    """Released earnings less every payout not failed or rejected (those in
+    progress included), and earnings still in escrow."""
     now = _now()
-    available = sum(r["net"] for r in rows if r["available_at"] <= now)
+    released = sum(r["net"] for r in rows if r["available_at"] <= now)
     pending = sum(r["net"] for r in rows if r["available_at"] > now)
-    return {"available": round(available, 2), "pending": round(pending, 2)}
+    payouts = payout_service.organiser_totals(db, organization_id)
+    return {
+        "available": round(released - payouts["in_progress"] - payouts["paid"], 2),
+        "pending": round(pending, 2),
+        "in_progress": round(payouts["in_progress"], 2),
+        "paid": round(payouts["paid"], 2),
+    }
 
 
 def _admitted_ids(db: Session, event_id: str, tickets: list[Ticket]) -> set[str]:
@@ -337,7 +346,7 @@ def control_center(organization_id: str, _m: OrganizerMember = Depends(read_acce
         "organiserName": org.business_name,
         # No subscription/plan model exists — nothing to show.
         "activePlans": [],
-        "wallet": _wallet(rows),
+        "wallet": {k: v for k, v in _wallet(db, organization_id, rows).items() if k in ("available", "pending")},
         "allTimeTickets": sum(r["quantity"] for r in rows if r["type"] == "primary_sale"),
         "allTimeRevenueKes": sum(r["gross"] for r in rows if r["type"] == "primary_sale"),
         "events": [
@@ -464,7 +473,7 @@ def earnings(organization_id: str, _m: OrganizerMember = Depends(read_access), d
     rows = _ledger(db, events)
     primary = [r for r in rows if r["type"] == "primary_sale"]
     royalties = [r for r in rows if r["type"] == "royalty"]
-    wallet = _wallet(rows)
+    wallet = _wallet(db, organization_id, rows)
     now = _now()
 
     per_event = []
@@ -508,8 +517,8 @@ def earnings(organization_id: str, _m: OrganizerMember = Depends(read_access), d
         "wallet": {
             "onlinePending": wallet["pending"],
             "availableBalance": wallet["available"],
-            # Payouts are never executed by this platform yet.
-            "totalPaidOut": 0,
+            "payoutsInProgress": wallet["in_progress"],
+            "totalPaidOut": wallet["paid"],
             "minPayoutKes": current_fees(db).min_payout_kes,
         },
         "totals": {
@@ -947,7 +956,7 @@ def _export_rows(db: Session, organization_id: str, export_type: str, events: li
             rows.append([
                 e.title, _iso(e.event_date), sum(r["gross"] for r in er), sum(r["fee"] + r["scanning_fee"] for r in er),
                 sum(r["net"] for r in er if r["type"] == "royalty"), sum(r["net"] for r in er), release.date().isoformat(),
-                "available (not yet paid out)" if release <= now else "pending",
+                "released" if release <= now else "in escrow",
             ])
         return header, rows
     raise HTTPException(status_code=400, detail=f"Unknown export type: {export_type}")
@@ -1044,16 +1053,77 @@ def update_profile(organization_id: str, body: OrganisationProfileUpdate, _m: Or
     return _profile_out(org)
 
 
+def _payout_details_out(org: Organizer) -> dict:
+    return {
+        "payoutMethod": org.payout_method or "mpesa",
+        "payoutDestination": org.payout_destination or "",
+        "payoutAccount": org.payout_account or "",
+        "payoutLabel": org.payout_label or "",
+    }
+
+
+def _destination(org: Organizer) -> str | None:
+    if org.payout_method not in payout_service.CHANNEL_LABEL or not org.payout_destination:
+        return None
+    return payout_service.describe_destination(org.payout_method, org.payout_destination,
+                                               org.payout_account, org.payout_label)
+
+
 @router.get("/payout-details")
 def get_payout_details(organization_id: str, _m: OrganizerMember = Depends(read_access), db: Session = Depends(get_db)):
-    org = _org(db, organization_id)
-    return {"payoutMethod": org.payout_method or "mpesa", "payoutDestination": org.payout_destination or ""}
+    return _payout_details_out(_org(db, organization_id))
 
 
 @router.patch("/payout-details")
-def update_payout_details(organization_id: str, body: PayoutDetailsUpdate, _m: OrganizerMember = Depends(owner_access), db: Session = Depends(get_db)):
+def update_payout_details(organization_id: str, body: PayoutDetailsUpdate, member: OrganizerMember = Depends(owner_access), db: Session = Depends(get_db)):
     org = _org(db, organization_id)
     org.payout_method = body.payoutMethod
     org.payout_destination = body.payoutDestination
+    org.payout_account = body.payoutAccount
+    org.payout_label = body.payoutLabel
+    # Where the money goes is worth a trail.
+    db.add(AuditLog(actor_id=member.account_id, action_type="payout_details_changed", target_type="organizer",
+                    target_id=org.id, details=_destination(org)))
     db.commit()
-    return {"success": True}
+    return _payout_details_out(org)
+
+
+@router.get("/payouts")
+def list_payouts(organization_id: str, _m: OrganizerMember = Depends(read_access), db: Session = Depends(get_db)):
+    """This organisation's payout requests, and whether it can make one."""
+    org = _org(db, organization_id)
+    wallet = _wallet(db, organization_id, _ledger(db, _events(db, organization_id)))
+    rows = db.query(Payout).filter(Payout.organizer_id == organization_id).order_by(Payout.created_at.desc()).all()
+    return {
+        "available": wallet["available"],
+        "minPayoutKes": current_fees(db).min_payout_kes,
+        "blockedReason": payout_service.organiser_block_reason(org),
+        "destination": _destination(org),
+        "transferCharges": [list(band) for band in PAYOUT_CHARGE_BANDS],
+        "payouts": [payout_service.serialize(p) for p in rows],
+    }
+
+
+@router.post("/payouts", status_code=status.HTTP_201_CREATED)
+def request_payout(organization_id: str, body: PayoutAmountRequest, member: OrganizerMember = Depends(owner_access), db: Session = Depends(get_db)):
+    """Ask ChainTix to pay out some or all of the available balance. A
+    finance admin approves it (app/api/routes/admin.py)."""
+    # Lock the organisation's row so two requests at once can't both pass
+    # the balance check (Postgres; SQLite runs one writer at a time).
+    org = db.query(Organizer).filter(Organizer.id == organization_id).with_for_update().first()
+    if not org:
+        raise HTTPException(status_code=404, detail="Organisation not found")
+    reason = payout_service.organiser_block_reason(org)
+    if reason:
+        raise HTTPException(status_code=400, detail=reason)
+    wallet = _wallet(db, organization_id, _ledger(db, _events(db, organization_id)))
+    try:
+        payout_service.check_amount(body.amount_kes, wallet["available"], current_fees(db).min_payout_kes)
+    except payout_service.PayoutError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    payout = payout_service.create_organiser_payout(db, org, member.user, body.amount_kes)
+    db.add(AuditLog(actor_id=member.account_id, action_type="payout_requested", target_type="payout",
+                    target_id=payout.id, details=f"KES {body.amount_kes:,.0f} to {_destination(org)}"))
+    db.commit()
+    db.refresh(payout)
+    return payout_service.serialize(payout)
