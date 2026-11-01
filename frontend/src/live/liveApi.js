@@ -246,8 +246,8 @@ export const liveApi = {
   pauseListing: (listingId) => request(`/resale/listings/${listingId}/pause`, { method: "POST" }),
   cancelListing: (listingId) => request(`/resale/listings/${listingId}`, { method: "DELETE" }),
   getWallet: () => request("/resale/wallet"),
-  withdrawToMpesa: ({ amount, phoneNumber }) =>
-    request("/resale/withdraw", { method: "POST", body: { amount_kes: amount, phone_number: phoneNumber } }),
+  // Always to the account's own M-Pesa number. Returns the payout.
+  withdrawToMpesa: ({ amount }) => request("/resale/withdraw", { method: "POST", body: { amount_kes: amount } }),
   getDisputes: () => request("/resale/disputes"),
 
   // Resale marketplace — buyer side.
@@ -264,8 +264,10 @@ export const liveApi = {
   updateOrganiserProfile: ({ businessName, kraPin, contactEmail, contactPhone }) =>
     orgRequest("/profile", { method: "PATCH", body: { businessName, kraPin, contactEmail, contactPhone: contactPhone || null } }),
   getPayoutDetails: () => orgRequest("/payout-details"),
-  updatePayoutDetails: ({ payoutMethod, payoutDestination }) =>
-    orgRequest("/payout-details", { method: "PATCH", body: { payoutMethod, payoutDestination } }),
+  updatePayoutDetails: ({ payoutMethod, payoutDestination, payoutAccount, payoutLabel }) =>
+    orgRequest("/payout-details", { method: "PATCH", body: { payoutMethod, payoutDestination, payoutAccount, payoutLabel } }),
+  getOrganiserPayouts: () => orgRequest("/payouts"),
+  requestOrganiserPayout: ({ amount }) => orgRequest("/payouts", { method: "POST", body: { amount_kes: amount } }),
 
   getTeamMembers: () =>
     orgRequest("/members").then((rows) =>
@@ -366,6 +368,12 @@ export const liveApi = {
   getFeeConfig: () => request("/admin/fees"),
   updateFeeConfig: (payload) => request("/admin/fees", { method: "PUT", body: payload }),
   getPayoutQueue: () => request("/admin/payouts"),
+  getPayoutRequests: () => request("/admin/payout-requests"),
+  approvePayout: (id) => request(`/admin/payout-requests/${id}/approve`, { method: "POST" }),
+  rejectPayout: ({ id, reason }) => request(`/admin/payout-requests/${id}/reject`, { method: "POST", body: { reason } }),
+  markPayoutPaid: ({ id, receipt }) => request(`/admin/payout-requests/${id}/mark-paid`, { method: "POST", body: { receipt } }),
+  markPayoutFailed: ({ id, reason }) => request(`/admin/payout-requests/${id}/mark-failed`, { method: "POST", body: { reason } }),
+  checkPayoutStatus: (id) => request(`/admin/payout-requests/${id}/check-status`, { method: "POST" }),
   getPlatformResaleCompliance: () => request("/admin/resale-compliance"),
   getFraudSignals: () => request("/admin/fraud-signals"),
   getBroadcastChannels: () => request("/admin/broadcast-channels"),

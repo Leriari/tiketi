@@ -9,7 +9,7 @@ from app.core.config import get_settings
 from app.core.json_response import UTCJSONResponse
 from app.db.session import get_db
 from app.services.platform_settings import flag_on
-from app.api.routes import auth, events, payments, tickets, gate, resale, dev, organisations, organiser_console, me, admin
+from app.api.routes import auth, events, payments, payouts, tickets, gate, resale, dev, organisations, organiser_console, me, admin
 
 settings = get_settings()
 
@@ -62,6 +62,7 @@ PREFIX = settings.API_V1_PREFIX
 app.include_router(auth.router,     prefix=PREFIX)
 app.include_router(events.router,   prefix=PREFIX)
 app.include_router(payments.router, prefix=PREFIX)
+app.include_router(payouts.router, prefix=PREFIX)
 app.include_router(tickets.router,  prefix=PREFIX)
 app.include_router(gate.router,     prefix=PREFIX)
 app.include_router(resale.router,   prefix=PREFIX)
@@ -93,6 +94,9 @@ def health_check(db: Session = Depends(get_db)):
         "card_payments": settings.PAYSTACK_CONFIGURED,
         # Test-mode key: checkout tells testers Paystack's test card number.
         "card_test_mode": settings.PAYSTACK_SECRET_KEY.startswith("sk_test_"),
+        # Whether payouts go out through M-Pesa B2C/B2B automatically, or an
+        # admin pays each one by hand.
+        "mpesa_payouts": settings.MPESA_PAYOUTS_CONFIGURED,
         # Firebase web config — public by design (it identifies the project,
         # it doesn't authorise anything). The login screen uses Firebase for
         # phone codes and Google sign-in only when this is present.

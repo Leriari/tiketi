@@ -405,10 +405,17 @@ def test_profile_and_payout_settings(owner, staff, org):
     assert res.status_code == 200, res.text
     assert client.get(f"{base}/profile", headers=staff).json()["contactPhone"] == "254711500001"
 
-    assert client.get(f"{base}/payout-details", headers=owner).json() == {"payoutMethod": "mpesa", "payoutDestination": ""}
-    assert client.patch(f"{base}/payout-details", json={"payoutMethod": "bank", "payoutDestination": "0123456789"}, headers=staff).status_code == 403
-    assert client.patch(f"{base}/payout-details", json={"payoutMethod": "bank", "payoutDestination": "0123456789"}, headers=owner).status_code == 200
-    assert client.get(f"{base}/payout-details", headers=owner).json()["payoutMethod"] == "bank"
+    assert client.get(f"{base}/payout-details", headers=owner).json() == {
+        "payoutMethod": "mpesa", "payoutDestination": "", "payoutAccount": "", "payoutLabel": ""}
+    bank = {"payoutMethod": "paybill", "payoutDestination": "247247", "payoutAccount": "0123456789", "payoutLabel": "Equity Bank"}
+    assert client.patch(f"{base}/payout-details", json=bank, headers=staff).status_code == 403
+    assert client.patch(f"{base}/payout-details", json=bank, headers=owner).status_code == 200
+    assert client.get(f"{base}/payout-details", headers=owner).json() == bank
+    # A paybill needs its account number; the old "bank" method is gone.
+    assert client.patch(f"{base}/payout-details", json={**bank, "payoutAccount": ""}, headers=owner).status_code == 422
+    assert client.patch(f"{base}/payout-details", json={"payoutMethod": "bank", "payoutDestination": "0123456789"}, headers=owner).status_code == 422
+    res = client.patch(f"{base}/payout-details", json={"payoutMethod": "mpesa", "payoutDestination": "0711 500 001", "payoutAccount": "x"}, headers=owner)
+    assert res.json() == {"payoutMethod": "mpesa", "payoutDestination": "254711500001", "payoutAccount": "", "payoutLabel": ""}
 
 
 def test_team_member_names_are_returned(owner, org):

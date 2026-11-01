@@ -26,13 +26,14 @@ from app.db.session import get_db
 from app.models.models import (
     AdminInvite, Attendance, AttendanceStatus, AuditLog, Broadcast, Event, EventStatus, FeatureFlag,
     FeeSchedule, GateScanner, Notification, Organizer, OrganizerMember, OrganizerVerificationStatus,
-    Payment, PaymentStatus, Ticket, TicketStatus, Transfer, TransferStatus, User, WalletTransaction,
-    WalletTransactionType,
+    Payment, PaymentStatus, Payout, PayoutStatus, Ticket, TicketStatus, Transfer, TransferStatus, User,
+    WalletTransaction, WalletTransactionType,
 )
 from app.schemas.schemas import (
     AdminInviteRequest, AdminReasonRequest, BroadcastCreate, FeatureFlagRollout, FeeConfigUpdate,
-    OrganiserReviewRequest,
+    OrganiserReviewRequest, PayoutReceiptRequest,
 )
+from app.services import payouts as payout_service
 from app.services.platform_settings import (
     DEFAULT_FEES, FLAG_SPECS, FLAGS, FeeHistory, current_fees, fees_from_row, flag_state,
 )
@@ -230,6 +231,15 @@ def notifications(_a: User = Depends(require_platform_admin), db: Session = Depe
     if failed:
         notices.append({"id": "n-mints", "severity": "warning", "link": "/admin",
                         "text": f"{plural(failed, 'paid ticket')} still not minted after {int(MINT_GRACE.total_seconds() // 60)} minutes"})
+    waiting = db.query(Payout).filter(Payout.status == PayoutStatus.PENDING_APPROVAL).count()
+    if waiting:
+        notices.append({"id": "n-payout-requests", "severity": "info", "link": "/admin/payouts",
+                        "text": f"{plural(waiting, 'payout')} waiting for approval"})
+    stuck = db.query(Payout).filter(Payout.status == PayoutStatus.PROCESSING,
+                                    Payout.sent_at < _now() - timedelta(minutes=30)).count()
+    if stuck:
+        notices.append({"id": "n-payouts-stuck", "severity": "warning", "link": "/admin/payouts",
+                        "text": f"{plural(stuck, 'payout')} sent over 30 minutes ago with no answer from M-Pesa"})
     queue = len(_payout_queue(db))
     if queue > 5:
         notices.append({"id": "n-payouts", "severity": "info", "link": "/admin/payouts",
@@ -242,7 +252,7 @@ def notifications(_a: User = Depends(require_platform_admin), db: Session = Depe
 def _organiser_out(org: Organizer, members: int, events: int) -> dict:
     notes = ["KRA PIN on file" if org.kra_pin else "No KRA PIN yet"]
     if org.payout_method and org.payout_destination:
-        notes.append(f"Payouts to {'M-Pesa' if org.payout_method == 'mpesa' else 'bank'} {_mask(org.payout_destination)}")
+        notes.append(f"Payouts to {payout_service.describe_destination(org.payout_method, org.payout_destination, org.payout_account, org.payout_label)}")
     else:
         notes.append("No payout details yet")
     notes.append(f"{members} member{'s' if members != 1 else ''} · {events} event{'s' if events != 1 else ''}")
@@ -486,7 +496,117 @@ def update_fees(body: FeeConfigUpdate, admin: User = Depends(finance_access), db
 
 @router.get("/payouts")
 def payout_queue(_a: User = Depends(require_platform_admin), db: Session = Depends(get_db)):
+    """Earnings still held in escrow, soonest release first."""
     return _payout_queue(db)
+
+
+def _payout_request_out(p: Payout, orgs: dict[str, str], phones: dict[str, str]) -> dict:
+    row = payout_service.serialize(p)
+    row["recipient"] = orgs.get(p.organizer_id, "Organiser") if p.organizer_id else _local_phone(phones.get(p.user_id))
+    row["sent_at"] = p.sent_at
+    return row
+
+
+@router.get("/payout-requests")
+def payout_requests(_a: User = Depends(require_platform_admin), db: Session = Depends(get_db)):
+    """Every payout: waiting for approval, in progress, and finished."""
+    rows = db.query(Payout).order_by(Payout.created_at.desc()).limit(500).all()
+    orgs = {o.id: o.business_name for o in db.query(Organizer).filter(Organizer.id.in_({p.organizer_id for p in rows if p.organizer_id})).all()} if rows else {}
+    phones = {u.id: u.phone_number for u in db.query(User).filter(User.id.in_({p.user_id for p in rows})).all()} if rows else {}
+    # The B2C account's balance, as of the latest result that reported it.
+    balance = None
+    for p in db.query(Payout).filter(Payout.status == PayoutStatus.PAID, Payout.channel == "mpesa",
+                                     Payout.manual.is_(False)).order_by(Payout.completed_at.desc()).limit(20):
+        for item in (((p.result_payload or {}).get("Result") or {}).get("ResultParameters") or {}).get("ResultParameter") or []:
+            if isinstance(item, dict) and item.get("Key") == "B2CUtilityAccountAvailableFunds":
+                balance = {"kes": item.get("Value"), "as_of": p.completed_at}
+                break
+        if balance:
+            break
+    return {
+        "automatic": settings.MPESA_PAYOUTS_CONFIGURED,
+        "payoutAccountBalance": balance,
+        "requests": [_payout_request_out(p, orgs, phones) for p in rows],
+    }
+
+
+def _payout(db: Session, payout_id: str) -> Payout:
+    return _get(db, Payout, payout_id, "Payout")
+
+
+def _payout_action_error(e: payout_service.PayoutError):
+    raise HTTPException(status_code=400, detail=str(e))
+
+
+def _payout_summary(p: Payout) -> str:
+    return f"KES {p.amount_kes:,.0f} to {payout_service.describe_destination(p.channel, p.destination, p.account_reference, p.destination_label)}"
+
+
+@router.post("/payout-requests/{payout_id}/approve")
+async def approve_payout(payout_id: str, admin: User = Depends(finance_access), db: Session = Depends(get_db)):
+    """Send it through M-Pesa now."""
+    payout = _payout(db, payout_id)
+    try:
+        await payout_service.approve(db, payout, admin)
+    except payout_service.PayoutError as e:
+        _payout_action_error(e)
+    _audit(db, admin, "payout_approved", "payout", payout.id, _payout_summary(payout))
+    db.commit()
+    db.refresh(payout)
+    return payout_service.serialize(payout)
+
+
+@router.post("/payout-requests/{payout_id}/reject")
+def reject_payout(payout_id: str, body: AdminReasonRequest, admin: User = Depends(finance_access), db: Session = Depends(get_db)):
+    payout = _payout(db, payout_id)
+    try:
+        payout_service.reject(db, payout, admin, body.reason.strip())
+    except payout_service.PayoutError as e:
+        _payout_action_error(e)
+    _audit(db, admin, "payout_rejected", "payout", payout.id, f"{_payout_summary(payout)}: {body.reason.strip()}")
+    db.commit()
+    return payout_service.serialize(payout)
+
+
+@router.post("/payout-requests/{payout_id}/mark-paid")
+def mark_payout_paid(payout_id: str, body: PayoutReceiptRequest, admin: User = Depends(finance_access), db: Session = Depends(get_db)):
+    """Record a payout the admin made by hand, or confirmed in the M-Pesa
+    business portal, with its M-Pesa receipt."""
+    payout = _payout(db, payout_id)
+    try:
+        payout_service.mark_paid_manually(db, payout, admin, body.receipt)
+    except payout_service.PayoutError as e:
+        _payout_action_error(e)
+    _audit(db, admin, "payout_marked_paid", "payout", payout.id, f"{_payout_summary(payout)}, M-Pesa {body.receipt}")
+    db.commit()
+    return payout_service.serialize(payout)
+
+
+@router.post("/payout-requests/{payout_id}/mark-failed")
+def mark_payout_failed(payout_id: str, body: AdminReasonRequest, admin: User = Depends(finance_access), db: Session = Depends(get_db)):
+    """For a payout with no answer that the admin has confirmed never
+    arrived: the money goes back to the recipient's balance."""
+    payout = _payout(db, payout_id)
+    try:
+        payout_service.mark_failed(db, payout, admin, body.reason.strip())
+    except payout_service.PayoutError as e:
+        _payout_action_error(e)
+    _audit(db, admin, "payout_marked_failed", "payout", payout.id, f"{_payout_summary(payout)}: {body.reason.strip()}")
+    db.commit()
+    return payout_service.serialize(payout)
+
+
+@router.post("/payout-requests/{payout_id}/check-status")
+async def check_payout_status(payout_id: str, admin: User = Depends(finance_access), db: Session = Depends(get_db)):
+    """Ask M-Pesa what happened; its answer settles the payout if it's clear."""
+    payout = _payout(db, payout_id)
+    try:
+        await payout_service.check_status(db, payout)
+    except payout_service.PayoutError as e:
+        _payout_action_error(e)
+    _audit(db, admin, "payout_status_checked", "payout", payout.id)
+    db.commit()
+    return payout_service.serialize(payout)
 
 
 # ── Integrity ───────────────────────────────────────────────────────────────

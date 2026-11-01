@@ -8,6 +8,7 @@ This sets up a free public deployment, good until January and beyond:
 | API, worker, database, Redis | One Oracle Cloud "Always Free" server, run with Docker | free, permanently |
 | HTTPS for the API | Caddy and Let's Encrypt, on a free `sslip.io` hostname | free |
 | Payments | M-Pesa **Daraja sandbox**, plus cards in Paystack **test mode** (no real money either way) | free |
+| Payouts | M-Pesa **B2C/B2B sandbox**, or paid by hand by an admin | free |
 | Tickets on-chain | Base **Sepolia** testnet | free (test ETH) |
 | Login | Google, through Firebase; phone codes only for 3 demo numbers | free |
 
@@ -176,6 +177,49 @@ Paystack emails the buyer its own card receipt, so paying by card needs an
 email address on the buyer's profile. Locally, only `PAYSTACK_SECRET_KEY` in
 `.env` is needed: when the buyer comes back from Paystack, checkout asks
 Paystack directly whether they paid.
+
+## Payouts (M-Pesa B2C and B2B)
+
+Sellers withdraw their resale money from the Seller Wallet, any amount,
+to their own M-Pesa number. Organisers request payouts from Earnings, to
+an M-Pesa number, a bank (through the bank's paybill), a paybill or a
+till; a finance admin approves each one in **Admin → Payout Queue**. Only
+verified organisations can be paid. M-Pesa's transfer charge comes off the
+amount sent.
+
+**Without Daraja payout credentials** (the default), nothing is sent
+automatically. Every withdrawal and request waits in the Payout Queue; an
+admin pays it from the M-Pesa business app, then chooses **Mark paid** and
+types the M-Pesa receipt.
+
+**To send them through M-Pesa:**
+
+1. On the Daraja portal, add the **Business To Customer** and **Business
+   Pay Bill** APIs to your sandbox app, if they aren't already.
+2. Open **Test Credentials**. Note the **Shortcode** (PartyA, e.g. 600xxx)
+   and the **Initiator Name**. Use the **Security Credential** generator
+   there to encrypt the Initiator Password, and copy the long result.
+3. In `deploy/.env.production` on your PC, fill in:
+   ```
+   MPESA_PAYOUT_SHORTCODE=600xxx
+   MPESA_INITIATOR_NAME=testapi
+   MPESA_SECURITY_CREDENTIAL=<the long encrypted string>
+   ```
+4. Copy the file to the server (step 3's `scp`), then on the server run
+   `cd ~/tiketi/deploy && ./up.sh`. The site's `/` health check then shows
+   `"mpesa_payouts": true`.
+
+Safaricom posts each result to
+`https://<PUBLIC-IP-WITH-DASHES>.sslip.io/api/v1/payouts/results/...`.
+Every payout gets its own address with a secret token, so nothing needs
+registering. If a result never arrives, use **Check status with M-Pesa**
+on the payout; never pay it again by hand without checking first.
+
+Before real money: B2C needs a bulk disbursement (B2C) shortcode, or a
+paybill converted to Safaricom's "one account", with a funded utility
+account. Check the transfer charges in `app/core/constants.py` against
+Safaricom's current tariff, and check whether holding and paying out
+other people's money needs a payment service licence from CBK.
 
 ## 5. Make yourself platform admin
 

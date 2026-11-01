@@ -22,7 +22,7 @@ from app.core.dependencies import get_current_user
 from app.db.session import get_db
 from app.models.models import (
     AuditLog, Event, OrganizerMember, Payment, PaymentStatus, Ticket, TicketStatus, Transfer,
-    TransferStatus, User, WalletTransaction, WalletTransactionType,
+    TransferStatus, User, WalletTransaction, WalletTransactionStatus, WalletTransactionType,
 )
 from app.services import auth_service
 
@@ -296,7 +296,9 @@ def _activity(db: Session, user: User) -> list[dict]:
     # Payouts.
     for w in db.query(WalletTransaction).filter(WalletTransaction.user_id == user.id,
                                                 WalletTransaction.type == WalletTransactionType.WITHDRAWAL).all():
-        items.append(_entry("withdrawal", "payout", w.created_at, "Withdrew to M-Pesa", w.description, -abs(w.amount_kes), "/seller/payouts", w.id))
+        title = {WalletTransactionStatus.PENDING: "Withdrawing to M-Pesa",
+                 WalletTransactionStatus.FAILED: "Withdrawal failed, money returned to your wallet"}.get(w.status, "Withdrew to M-Pesa")
+        items.append(_entry("withdrawal", "payout", w.created_at, title, w.description, -abs(w.amount_kes), "/seller/payouts", w.id))
 
     # Tickets: complimentary received, admissions.
     for t in db.query(Ticket).filter(Ticket.owner_id == user.id).all():
