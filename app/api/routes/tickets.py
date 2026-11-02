@@ -10,7 +10,7 @@ from typing import List
 from app.db.session import get_db
 from app.models.models import (
     Attendance, AttendanceStatus, AuditLog, Barcode, BarcodeStatus, GateScanner, Payment, PaymentStatus, Ticket,
-    TicketStatus, User,
+    TicketStatus, Transfer, TransferStatus, User,
 )
 from app.schemas.schemas import TicketOut, TicketSeedResponse, TicketTransferRequest
 from app.services.totp_service import (
@@ -97,6 +97,8 @@ def get_ticket_detail(
         Attendance.ticket_id == ticket.id, Attendance.status == AttendanceStatus.ADMITTED
     ).order_by(Attendance.scan_time).first()
     payment = _payment_for(db, ticket, current_user)
+    from app.services.web3_service import ticket_contract_address
+    contract = ticket_contract_address(ticket) if ticket.nft_token_id else settings.NFT_CONTRACT_ADDRESS
     return {
         "ticket_id": ticket.id,
         "status": ticket.status.value,
@@ -127,12 +129,12 @@ def get_ticket_detail(
         "chain_status": "verified" if ticket.nft_token_id else "pending",
         "chain": {
             "network": settings.BLOCKCHAIN_NETWORK_NAME,
-            "contract_address": settings.NFT_CONTRACT_ADDRESS or None,
-            "contract_url": _explorer("address", settings.NFT_CONTRACT_ADDRESS),
+            "contract_address": contract or None,
+            "contract_url": _explorer("address", contract),
             "token_id": ticket.nft_token_id,
             "token_url": (
-                f"{settings.BLOCKCHAIN_EXPLORER_URL.rstrip('/')}/token/{settings.NFT_CONTRACT_ADDRESS}?a={ticket.nft_token_id}"
-                if ticket.nft_token_id and settings.NFT_CONTRACT_ADDRESS else None
+                f"{settings.BLOCKCHAIN_EXPLORER_URL.rstrip('/')}/token/{contract}?a={ticket.nft_token_id}"
+                if ticket.nft_token_id and contract else None
             ),
             "mint_tx_hash": ticket.nft_tx_hash,
             "mint_tx_url": _explorer("tx", ticket.nft_tx_hash),
@@ -167,7 +169,7 @@ def verify_ticket_onchain(
     if not settings.BLOCKCHAIN_CONFIGURED:
         raise HTTPException(status_code=503, detail="This server isn't connected to the blockchain.")
     try:
-        chain = web3_service.read_ticket_onchain(ticket.nft_token_id, ticket.nft_tx_hash)
+        chain = web3_service.read_ticket_onchain(ticket.nft_token_id, ticket.nft_tx_hash, web3_service.ticket_contract_address(ticket))
     except web3_service.ContractRevertError as exc:
         raise HTTPException(status_code=502, detail=f"The contract rejected the lookup: {exc}")
     except Exception:
@@ -190,6 +192,32 @@ def verify_ticket_onchain(
         checks.append({"label": "Admission recorded on-chain", "pass": chain["used"], "pending": not chain["used"]})
     else:
         checks.append({"label": "Not yet used at the gate", "pass": not chain["used"]})
+
+    # Its resale history, each sale checked against its settlement transaction.
+    address = web3_service.ticket_contract_address(ticket)
+    resales = []
+    for t in (db.query(Transfer).filter(Transfer.ticket_id == ticket.id)
+              .filter(Transfer.status.in_((TransferStatus.LISTED, TransferStatus.PENDING_PAYMENT, TransferStatus.PAID,
+                                           TransferStatus.COMPLETED)))
+              .order_by(Transfer.created_at).all()):
+        price = int(round(t.transfer_price_kes or t.asking_price_kes))
+        if t.status in (TransferStatus.LISTED, TransferStatus.PENDING_PAYMENT):
+            checks.append({"label": f"Listed for resale on-chain at KES {price:,}", "pass": chain["listed_price_kes"] == price})
+        else:
+            settled = None
+            if t.settlement_tx_hash:
+                try:
+                    settled = web3_service.read_settlement_onchain(t.settlement_tx_hash, address)
+                except Exception:
+                    logger.warning("Couldn't read settlement %s", t.settlement_tx_hash, exc_info=True)
+            checks.append({
+                "label": f"Resold for KES {price:,}, settled on-chain",
+                "pass": bool(settled) and settled["token_id"] == ticket.nft_token_id and settled["price_kes"] == price,
+                "pending": not t.settlement_tx_hash,
+            })
+        resales.append({"price_kes": price, "listed_at": t.created_at, "sold_at": t.transferred_at,
+                        "listing_tx_url": web3_service.explorer_url("tx", t.listing_tx_hash),
+                        "settlement_tx_url": web3_service.explorer_url("tx", t.settlement_tx_hash)})
     return {
         "verified_at": datetime.now(timezone.utc),
         "network": settings.BLOCKCHAIN_NETWORK_NAME,
@@ -199,6 +227,9 @@ def verify_ticket_onchain(
         "minted_at": datetime.fromtimestamp(chain["minted_at"], tz=timezone.utc) if chain["minted_at"] else None,
         "face_price_kes": chain["face_price_kes"],
         "resale_cap_percent": chain["resale_cap_bps"] / 100,
+        # None: minted on the older contract, which has no on-chain floor.
+        "resale_floor_percent": chain["resale_floor_bps"] / 100 if chain["resale_floor_bps"] is not None else None,
+        "resales": resales,
         "royalty_percent": chain["royalty_bps"] / 100,
         "used": chain["used"],
         "listed_price_kes": chain["listed_price_kes"] or None,

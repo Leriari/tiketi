@@ -8,6 +8,8 @@ Handles:
     Transaction Status query that reconciles one with no result
 """
 import base64
+import hashlib
+import hmac
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -56,11 +58,27 @@ def _generate_password(timestamp: str) -> str:
     return base64.b64encode(raw.encode()).decode()
 
 
+def stk_callback_token(payment_id: str) -> str:
+    """The secret in a payment's callback URL. Daraja callbacks aren't
+    signed, so knowing this URL is what proves a callback came from
+    Safaricom: only Daraja was ever given it."""
+    return hmac.new(settings.SECRET_KEY.encode(), f"stk:{payment_id}".encode(), hashlib.sha256).hexdigest()[:32]
+
+
+def stk_callback_path(payment_id: str) -> str:
+    return f"/api/v1/payments/mpesa/callback/{payment_id}/{stk_callback_token(payment_id)}"
+
+
+def stk_callback_url(payment_id: str) -> str:
+    return f"{settings.API_ORIGIN}{stk_callback_path(payment_id)}"
+
+
 async def stk_push(
     phone_number: str,
     amount: int,
     account_reference: str,
     transaction_desc: str,
+    callback_url: str,
 ) -> dict:
     """
     Initiate Lipa Na M-Pesa Online (STK Push).
@@ -70,6 +88,8 @@ async def stk_push(
         amount:             KES amount (integer)
         account_reference:  Shown on customer's M-Pesa statement (e.g. ticket ID)
         transaction_desc:   Short description
+        callback_url:       Where Daraja posts the result — the payment's own
+                            URL (app/api/routes/payments.py stk_callback_url)
 
     Returns:
         Daraja response dict with MerchantRequestID and CheckoutRequestID
@@ -87,7 +107,7 @@ async def stk_push(
         "PartyA": phone_number,           # customer phone
         "PartyB": settings.MPESA_SHORTCODE,
         "PhoneNumber": phone_number,
-        "CallBackURL": settings.MPESA_CALLBACK_URL,
+        "CallBackURL": callback_url,
         "AccountReference": account_reference[:12],  # max 12 chars
         "TransactionDesc": transaction_desc[:13],     # max 13 chars
     }

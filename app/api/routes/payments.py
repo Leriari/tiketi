@@ -2,12 +2,13 @@
 Payment flow:
   POST /payments/purchase     → STK push sent to user's phone, or (method
                                 "card") a Paystack Checkout page to send them to
-  POST /payments/mpesa/callback → Daraja confirms payment → ticket activated
+  POST /payments/mpesa/callback/{id}/{token} → Daraja confirms payment → ticket activated
   POST /payments/paystack/webhook → Paystack confirms a card payment → same
   GET  /payments/{id}/status  → Poll payment status (for a card payment,
                                 also asks Paystack, so no webhook is needed)
   POST /payments/{id}/cancel  → The buyer cancelled on Paystack's page
 """
+import hmac
 import logging
 from datetime import datetime, timezone
 
@@ -340,6 +341,7 @@ async def purchase_ticket(
             amount=int(total_amount),
             account_reference=primary_ticket.id[:12],
             transaction_desc=f"Ticket: {event.title[:13]}",
+            callback_url=mpesa_service.stk_callback_url(payment.id),
         )
     except Exception as e:
         db.rollback()
@@ -361,29 +363,44 @@ async def purchase_ticket(
     )
 
 
-@router.post("/mpesa/callback", include_in_schema=False)
-async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
+async def _daraja_confirms(checkout_request_id: str) -> bool | None:
+    """Ask Daraja (STK Push Query) whether this checkout was paid: True or
+    False when it answers, None when it can't be asked right now."""
+    try:
+        answer = await mpesa_service.query_stk_status(checkout_request_id)
+    except Exception as e:
+        logger.warning(f"STK query for {checkout_request_id} failed: {e}")
+        return None
+    code = answer.get("ResultCode")
+    if code is None:
+        return None
+    return str(code) == "0"
+
+
+@router.post("/mpesa/callback/{payment_id}/{token}", include_in_schema=False)
+async def mpesa_callback(payment_id: str, token: str, request: Request, db: Session = Depends(get_db)):
     """
-    Safaricom Daraja POSTs payment result here.
-    This endpoint must be publicly accessible (no auth).
-    Always return 200 to Daraja regardless of processing result.
+    Daraja posts an STK push's result here: each payment has its own URL
+    with a secret token (mpesa_service.stk_callback_url), since Daraja
+    callbacks aren't signed. A success is applied only when the checkout ID
+    and amount match the payment and Daraja itself, asked directly, doesn't
+    say otherwise. Always answers 200 so Daraja stops retrying.
     """
+    if not hmac.compare_digest(mpesa_service.stk_callback_token(payment_id), token):
+        raise HTTPException(status_code=403, detail="Invalid token")
+    accepted = {"ResultCode": 0, "ResultDesc": "Accepted"}
     try:
         body = await request.json()
-        logger.info(f"M-Pesa callback received: {body}")
-
+        logger.info(f"M-Pesa callback for payment {payment_id}: {body}")
         parsed = mpesa_service.parse_callback(body)
-        checkout_id = parsed.get("checkout_request_id")
 
-        payment = (
-            db.query(Payment)
-            .filter(Payment.checkout_request_id == checkout_id)
-            .first()
-        )
-
-        if not payment:
-            logger.warning(f"No payment found for CheckoutRequestID: {checkout_id}")
-            return {"ResultCode": 0, "ResultDesc": "Accepted"}
+        payment = db.get(Payment, payment_id)
+        if not payment or payment.method != "mpesa":
+            logger.warning(f"M-Pesa callback for unknown payment {payment_id}")
+            return accepted
+        if parsed.get("checkout_request_id") != payment.checkout_request_id:
+            logger.error(f"M-Pesa callback for payment {payment_id} names another checkout: {parsed.get('checkout_request_id')}")
+            return accepted
 
         # Each payment is resolved exactly once. Daraja can deliver the same
         # callback twice, and a resale purchase that timed out has already
@@ -395,31 +412,41 @@ async def mpesa_callback(request: Request, db: Session = Depends(get_db)):
                     f"M-Pesa success for payment {payment.id} that is already {payment.status.value} "
                     f"(receipt {parsed.get('receipt_number')}) — not applied; needs a manual refund check."
                 )
-            return {"ResultCode": 0, "ResultDesc": "Accepted"}
+            return accepted
 
-        minted_tickets = []
-        paid_transfer = None
-
+        minted_tickets, paid_transfer = [], None
         if parsed["success"]:
-            # ── Payment confirmed ────────────────────────────────────────────
+            paid = float(parsed.get("amount") or 0)
+            if int(round(paid)) != int(payment.amount_kes):
+                logger.error(f"M-Pesa says KES {paid} paid for payment {payment.id} of KES {payment.amount_kes} — not applied")
+                return accepted
+            confirmed = await _daraja_confirms(payment.checkout_request_id)
+            if confirmed is False:
+                logger.error(f"Callback says payment {payment.id} was paid, but Daraja's STK query says not — not applied")
+                return accepted
+            if not _claim(db, payment):
+                return accepted
             minted_tickets, paid_transfer = _handle_payment_success(db, payment, parsed["receipt_number"])
-            if minted_tickets:
-                logger.info(f"{len(minted_tickets)} ticket(s) activated for payment {payment.id}. Receipt: {parsed['receipt_number']}")
-            elif paid_transfer:
-                logger.info(f"Resale transfer {paid_transfer.id} paid. Receipt: {parsed['receipt_number']}")
-
+            logger.info(f"Payment {payment.id} confirmed. Receipt: {parsed['receipt_number']}"
+                        f"{'' if confirmed else ' (STK query unavailable; callback URL token trusted)'}")
         else:
-            # ── Payment failed ───────────────────────────────────────────────
+            if not _claim(db, payment):
+                return accepted
             _handle_payment_failure(db, payment, parsed.get("result_desc") or "Unknown failure")
             logger.info(f"Payment failed for payment {payment.id}: {payment.failure_reason}")
 
         db.commit()
         _after_success(payment, minted_tickets, paid_transfer)
-
     except Exception as e:
         logger.error(f"Callback processing error: {e}", exc_info=True)
+    return accepted
 
-    # Always return 200 to Daraja
+
+@router.post("/mpesa/callback", include_in_schema=False)
+async def legacy_mpesa_callback(request: Request):
+    """The old shared callback address, which anyone could post to. Nothing
+    sent here is applied any more; payments use their own URLs above."""
+    logger.warning("Ignored an M-Pesa callback sent to the old shared URL")
     return {"ResultCode": 0, "ResultDesc": "Accepted"}
 
 

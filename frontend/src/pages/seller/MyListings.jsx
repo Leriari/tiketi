@@ -1,9 +1,11 @@
 import { useEffect, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Sparkles } from "lucide-react";
 import { api, ApiError, usingMockBackend } from "../../api";
 import { useToast } from "../../components/ui/Toast";
 import { Tabs, Table, Badge, MoneyText, Button, Modal, Input } from "../../components/ui";
 import { formatEventDate } from "../../format";
+import { ExplorerLink } from "../../components/ChainChecks";
 
 const STATUS_TONE = { pending_review: "warning", active: "success", sold: "brand", paused: "warning", cancelled: "danger", expired: "neutral" };
 const STATUS_LABEL = { pending_review: "Pending Review", active: "Active", sold: "Sold", paused: "Paused", cancelled: "Cancelled", expired: "Expired" };
@@ -51,6 +53,7 @@ function RepriceModal({ listing, onClose, onSaved }) {
 
 export default function MyListings() {
   const toast = useToast();
+  const navigate = useNavigate();
   const [tab, setTab] = useState("active");
   const [listings, setListings] = useState(null);
   const [selectedIds, setSelectedIds] = useState([]);
@@ -134,6 +137,16 @@ export default function MyListings() {
           { key: "payout_kes", header: "Your payout", render: (l) => <MoneyText value={l.payout_kes} variant="positive" /> },
           { key: "views", header: "Views", render: (l) => <span className="tabular-nums">{l.views}</span> },
           {
+            key: "onchain",
+            header: "On-chain",
+            render: (l) => (
+              <div className="flex flex-col gap-0.5 text-caption">
+                {l.listing_tx_url ? <ExplorerLink href={l.listing_tx_url}>Listing</ExplorerLink> : <span className="text-ink-tertiary">—</span>}
+                {l.settlement_tx_url && <ExplorerLink href={l.settlement_tx_url}>Sale</ExplorerLink>}
+              </div>
+            ),
+          },
+          {
             key: "status",
             header: "Status",
             render: (l) => (
@@ -159,7 +172,9 @@ export default function MyListings() {
           if (["active", "paused", "pending_review"].includes(l.status)) {
             items.push({ label: "Cancel listing", danger: true, onClick: () => act(api.cancelListing, l.id, "Listing cancelled.") });
           }
-          items.push({ label: "View public listing", onClick: () => toast.push("The public resale marketplace page isn't built yet — that's an Attendee-side Phase 6 feature.", { tone: "info" }) });
+          if (["active", "paused"].includes(l.status)) {
+            items.push({ label: "View public listing", onClick: () => navigate(`/resale/${l.id}`) });
+          }
           return items;
         }}
       />

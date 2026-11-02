@@ -123,6 +123,8 @@ def pytest_configure(config):
 
     os.environ["BLOCKCHAIN_RPC_URL"] = "http://127.0.0.1:8545"
     os.environ["NFT_CONTRACT_ADDRESS"] = match.group(1)
+    # Every test ticket is on the contract just deployed, whatever .env says.
+    os.environ["NFT_LEGACY_CONTRACT_ADDRESS"] = ""
     os.environ["MINTER_PRIVATE_KEY"] = LOCAL_MINTER_PRIVATE_KEY
 
     os.environ["REDIS_URL"] = "redis://localhost:6379/15"

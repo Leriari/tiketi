@@ -205,6 +205,11 @@ def test_full_mpesa_flow(auth_headers, test_org, test_event, monkeypatch):
         }
 
     monkeypatch.setattr(mpesa_svc, "stk_push", mock_stk_push)
+
+    async def mock_stk_query(checkout_request_id):
+        return {"ResponseCode": "0", "ResultCode": "0", "ResultDesc": "The service request is processed successfully."}
+
+    monkeypatch.setattr(mpesa_svc, "query_stk_status", mock_stk_query)
     # Don't let this test enqueue a real Celery task onto the real Redis
     # broker — it's a side effect on an external system the test shouldn't have.
     monkeypatch.setattr(mint_ticket_nft, "delay", lambda *a, **kw: None)
@@ -244,7 +249,7 @@ def test_full_mpesa_flow(auth_headers, test_org, test_event, monkeypatch):
             }
         }
     }
-    res = client.post("/api/v1/payments/mpesa/callback", json=callback_payload)
+    res = client.post(mpesa_svc.stk_callback_path(payment_id), json=callback_payload)
     assert res.status_code == 200
 
     # 4. Check status is now SUCCESS

@@ -4,7 +4,25 @@ Work Order 05 B1 (gate partitioning) + B5 (scan reconciliation) tests.
 Reuses test_api.py's TestClient/DB setup, same reasoning as the other
 cross-file test modules in this suite.
 """
+import pytest
+
 from tests.test_api import client, TestingSessionLocal
+
+
+@pytest.fixture(autouse=True)
+def _fake_daraja(monkeypatch):
+    """No real Daraja calls from tests: STK pushes and STK queries are faked."""
+    import uuid
+    from app.services import mpesa as mpesa_svc
+
+    async def fake_stk_push(**kwargs):
+        return {"MerchantRequestID": f"m-{uuid.uuid4().hex[:8]}", "CheckoutRequestID": f"c-{uuid.uuid4().hex[:10]}", "ResponseCode": "0"}
+
+    async def fake_query(checkout_request_id):
+        return {"ResponseCode": "0", "ResultCode": "0", "ResultDesc": "The service request is processed successfully."}
+
+    monkeypatch.setattr(mpesa_svc, "stk_push", fake_stk_push)
+    monkeypatch.setattr(mpesa_svc, "query_stk_status", fake_query)
 
 
 def _login(phone: str) -> dict:

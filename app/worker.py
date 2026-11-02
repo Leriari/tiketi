@@ -87,6 +87,13 @@ def mint_ticket_nft(self, ticket_id: str):
             if tier.price_kes
             else 10000  # no price to compute a ratio against — default to "no markup allowed"
         )
+        # The organiser's lowest allowed resale price, as a share of face
+        # value; never above the cap (the contract refuses that).
+        resale_floor_bps = (
+            min(int(round((tier.resale_floor_price_kes or 0) / tier.price_kes * 10000)), resale_cap_bps)
+            if tier.price_kes
+            else 0
+        )
         royalty_bps = int(round(tier.organizer_royalty_percent * 100))
 
         try:
@@ -94,6 +101,7 @@ def mint_ticket_nft(self, ticket_id: str):
                 event_id=ticket.event_id,
                 tier_id=ticket.tier_id,
                 face_price_kes=int(tier.price_kes),
+                resale_floor_bps=resale_floor_bps,
                 resale_cap_bps=resale_cap_bps,
                 royalty_bps=royalty_bps,
             )
@@ -103,6 +111,7 @@ def mint_ticket_nft(self, ticket_id: str):
 
         ticket.nft_token_id = token_id
         ticket.nft_tx_hash = tx_hash
+        ticket.nft_contract_address = settings.NFT_CONTRACT_ADDRESS
         db.commit()
 
         logger.info(f"Minted NFT for ticket={ticket_id}: token_id={token_id} tx={tx_hash}")
@@ -163,7 +172,7 @@ def settle_resale_transfer(self, transfer_id: str):
             return {"status": "error", "reason": "no_nft_token", "transfer_id": transfer_id}
 
         try:
-            tx_hash = web3_service.settle_custodial_resale_onchain(ticket.nft_token_id)
+            tx_hash = web3_service.settle_custodial_resale_onchain(ticket.nft_token_id, web3_service.ticket_contract_address(ticket))
         except Exception as exc:
             logger.error(f"settle_resale_transfer failed for transfer={transfer_id}: {exc}")
             transfer.status = TransferStatus.SETTLEMENT_FAILED
@@ -257,7 +266,7 @@ def mark_ticket_used_onchain(self, ticket_id: str):
         if not ticket.nft_token_id:
             raise self.retry()  # not minted yet
         try:
-            tx_hash = web3_service.mark_used_onchain(ticket.nft_token_id)
+            tx_hash = web3_service.mark_used_onchain(ticket.nft_token_id, web3_service.ticket_contract_address(ticket))
         except web3_service.ContractRevertError as exc:
             if "already used" in str(exc):
                 return {"status": "already_used", "ticket_id": ticket_id}

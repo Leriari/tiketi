@@ -134,6 +134,22 @@ def _buy_and_settle(buyer_headers: dict, listing_id: str, buyer_phone: str) -> s
 
 # ── Fixtures ─────────────────────────────────────────────────────────────────
 
+@pytest.fixture(autouse=True)
+def _fake_daraja(monkeypatch):
+    """No real Daraja calls from tests: STK pushes and STK queries are faked."""
+    import uuid
+    from app.services import mpesa as mpesa_svc
+
+    async def fake_stk_push(**kwargs):
+        return {"MerchantRequestID": f"m-{uuid.uuid4().hex[:8]}", "CheckoutRequestID": f"c-{uuid.uuid4().hex[:10]}", "ResponseCode": "0"}
+
+    async def fake_query(checkout_request_id):
+        return {"ResponseCode": "0", "ResultCode": "0", "ResultDesc": "The service request is processed successfully."}
+
+    monkeypatch.setattr(mpesa_svc, "stk_push", fake_stk_push)
+    monkeypatch.setattr(mpesa_svc, "query_stk_status", fake_query)
+
+
 @pytest.fixture(scope="module")
 def seller_headers():
     return _login("0711000001")
@@ -181,6 +197,58 @@ def test_listing_one_shilling_above_cap_reverts_onchain(seller_headers, multipli
     # This IS the assertion that matters: the failure must be the contract's
     # own revert string, not an application-level validation message.
     assert detail == "TiketiNFT: price exceeds resale cap", detail
+
+
+@pytest.mark.parametrize("floor", [1.0, 0.5])
+def test_floor_is_enforced_onchain(seller_headers, floor):
+    """The organiser's minimum resale price is fixed in the contract at
+    mint: one shilling under it is the contract's own revert, and exactly
+    at it lists."""
+    event = _create_event(seller_headers, min_resale_multiplier=floor, ticket_price_kes=1000)
+    ticket_id = _purchase_and_mint(seller_headers, event["id"], "0711000001")
+    assert _get_ticket(ticket_id).nft_contract_address  # minted on the current contract
+
+    floor_price = round(1000 * floor)
+    res = client.post("/api/v1/resale/listings", json={"ticket_id": ticket_id, "price_kes": floor_price - 1}, headers=seller_headers)
+    assert res.status_code == 400, res.text
+    assert res.json()["detail"] == "TiketiNFT: price below resale floor"
+    _list_ticket(seller_headers, ticket_id, floor_price)
+
+
+def test_buyers_and_holders_can_check_a_resale_onchain(seller_headers, buyer_headers):
+    """Before paying, a buyer reads the listing back from the contract; after
+    the sale, the listing and the new holder's ticket both show the sale's
+    settlement transaction, decoded from the chain."""
+    event = _create_event(seller_headers, ticket_price_kes=1000, max_resale_multiplier=1.2, min_resale_multiplier=0.8)
+    ticket_id = _purchase_and_mint(seller_headers, event["id"], "0711000001")
+    listing = _list_ticket(seller_headers, ticket_id, 1100)
+    assert listing["listing_tx_url"].endswith(listing["listing_tx_hash"])
+
+    before = client.get(f"/api/v1/resale/listings/{listing['id']}/onchain").json()  # public: no login
+    assert before["all_passed"] is True, before["checks"]
+    assert (before["floor_kes"], before["cap_kes"], before["listed_price_kes"]) == (800, 1200, 1100)
+    assert any("Listed on-chain at KES 1,100" in c["label"] for c in before["checks"])
+
+    _buy_and_settle(buyer_headers, listing["id"], "0711000002")
+    after = client.get(f"/api/v1/resale/listings/{listing['id']}/onchain").json()
+    assert after["all_passed"] is True, after["checks"]
+    assert any(c["label"] == "Sale settled on-chain at KES 1,100" and c["pass"] for c in after["checks"])
+
+    ticket = client.get(f"/api/v1/tickets/{ticket_id}/onchain", headers=buyer_headers).json()
+    assert ticket["all_passed"] is True, ticket["checks"]
+    assert ticket["resale_floor_percent"] == 80 and ticket["resale_cap_percent"] == 120
+    assert any(c["label"] == "Resold for KES 1,100, settled on-chain" and c["pass"] for c in ticket["checks"])
+    assert ticket["resales"][0]["settlement_tx_url"]
+
+
+def test_floor_outside_range_is_rejected(seller_headers):
+    _create_event(seller_headers)  # makes sure the seller has an organisation
+    user_id = client.get("/api/v1/auth/me", headers=seller_headers).json()["id"]
+    res = client.post("/api/v1/events/", json={
+        "organization_id": _orgs_by_user[user_id], "title": "Bad Floor", "venue": "V", "event_date": "2027-06-01T18:00:00",
+        "ticket_price_kes": 1000, "total_capacity": 10, "min_resale_multiplier": 1.5,
+    }, headers=seller_headers)
+    assert res.status_code == 400 and "minimum resale price" in res.json()["detail"]
 
 
 # ── Payout arithmetic ────────────────────────────────────────────────────────
@@ -395,6 +463,7 @@ def test_failed_mpesa_payment_releases_listing_back_to_active(seller_headers, bu
     )
     assert res.status_code == 201, res.text
     checkout_request_id = res.json()["checkout_request_id"]
+    payment_id = res.json()["payment_id"]
 
     callback_body = {
         "Body": {
@@ -406,7 +475,8 @@ def test_failed_mpesa_payment_releases_listing_back_to_active(seller_headers, bu
             }
         }
     }
-    res = client.post("/api/v1/payments/mpesa/callback", json=callback_body)
+    from app.services.mpesa import stk_callback_path
+    res = client.post(stk_callback_path(payment_id), json=callback_body)
     assert res.status_code == 200
 
     transfer = _get_transfer(listing["id"])

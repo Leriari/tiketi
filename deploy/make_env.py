@@ -88,6 +88,7 @@ def main():
         ("# Blockchain — Base Sepolia testnet", None),
         ("BLOCKCHAIN_RPC_URL", keep("BLOCKCHAIN_RPC_URL")),
         ("NFT_CONTRACT_ADDRESS", keep("NFT_CONTRACT_ADDRESS")),
+        ("NFT_LEGACY_CONTRACT_ADDRESS", keep("NFT_LEGACY_CONTRACT_ADDRESS")),
         ("MINTER_PRIVATE_KEY", keep("MINTER_PRIVATE_KEY")),
         ("", None),
         ("# Receipt emails over SMTP — Gmail: smtp.gmail.com with an app password", None),

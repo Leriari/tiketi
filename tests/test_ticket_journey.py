@@ -138,9 +138,10 @@ def test_onchain_check_reads_the_real_contract():
     db = TestingSessionLocal()
     ticket = db.get(Ticket, ticket_id)
     token_id, tx_hash = web3_service.mint_ticket_onchain(
-        event_id=ticket.event_id, tier_id=ticket.tier_id, face_price_kes=750, resale_cap_bps=12000, royalty_bps=1000,
+        event_id=ticket.event_id, tier_id=ticket.tier_id, face_price_kes=750, resale_floor_bps=10000, resale_cap_bps=12000, royalty_bps=1000,
     )
     ticket.nft_token_id, ticket.nft_tx_hash = token_id, tx_hash
+    ticket.nft_contract_address = web3_service.settings.NFT_CONTRACT_ADDRESS
     db.commit()
     db.close()
 

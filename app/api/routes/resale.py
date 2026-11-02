@@ -134,12 +134,32 @@ def _log_rejected_listing(db: Session, user_id: str, ticket: Ticket, price_kes: 
     Compliance page counts real blocked attempts, not a guess."""
     db.add(AuditLog(
         actor_id=user_id,
-        action_type="resale_rejected_above_cap" if "cap" in message.lower() else "resale_rejected",
+        action_type=("resale_rejected_above_cap" if "cap" in message.lower()
+                     else "resale_rejected_below_floor" if "floor" in message.lower() else "resale_rejected"),
         target_id=ticket.event_id,
         target_type="event",
         details=f"ticket={ticket.id} price_kes={int(round(price_kes))} reason={message}",
     ))
     db.commit()
+
+
+def _list_onchain(db: Session, user_id: str, ticket: Ticket, price_kes: float) -> str:
+    """List (or re-list) a ticket at this price on its contract; returns the
+    tx hash. The contract decides whether the price is allowed — above the
+    cap or below the floor it reverts — and its message goes back to the
+    seller as a 400. A ticket minted on the older contract has no floor
+    on-chain, so only for those is the floor checked here instead."""
+    address = web3_service.ticket_contract_address(ticket)
+    floor = ticket.tier.resale_floor_price_kes if ticket.tier else 0
+    if not web3_service.has_onchain_floor(address) and floor and price_kes < floor:
+        message = f"Below the organiser's minimum resale price of KES {floor:,.0f}"
+        _log_rejected_listing(db, user_id, ticket, price_kes, message)
+        raise HTTPException(status_code=400, detail=message)
+    try:
+        return web3_service.list_for_resale_onchain(ticket.nft_token_id, int(round(price_kes)), address)
+    except web3_service.ContractRevertError as e:
+        _log_rejected_listing(db, user_id, ticket, price_kes, str(e))
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # ── Serialization helpers ───────────────────────────────────────────────────
@@ -200,6 +220,11 @@ def _serialize_listing(transfer: Transfer) -> dict:
         "resale_floor_kes": tier.resale_floor_price_kes if tier else 0.0,
         "resale_ceiling_kes": tier.resale_ceiling_price_kes if tier else 0.0,
         "checked_in": ticket.status == TicketStatus.USED if ticket else False,
+        # The listing and (once sold) the settlement, as recorded on-chain.
+        "listing_tx_hash": transfer.listing_tx_hash,
+        "listing_tx_url": web3_service.explorer_url("tx", transfer.listing_tx_hash),
+        "settlement_tx_hash": transfer.settlement_tx_hash,
+        "settlement_tx_url": web3_service.explorer_url("tx", transfer.settlement_tx_hash),
     }
 
 
@@ -335,10 +360,7 @@ def create_listing(
 
     # The chain, not this function, decides whether the price is allowed.
     try:
-        tx_hash = web3_service.list_for_resale_onchain(ticket.nft_token_id, int(round(body.price_kes)))
-    except web3_service.ContractRevertError as e:
-        _log_rejected_listing(db, current_user.id, ticket, body.price_kes, str(e))
-        raise HTTPException(status_code=400, detail=str(e))
+        tx_hash = _list_onchain(db, current_user.id, ticket, body.price_kes)
     except RuntimeError as e:
         raise HTTPException(status_code=503, detail=str(e))
 
@@ -392,6 +414,70 @@ def get_listing(listing_id: str, db: Session = Depends(get_db)):
     data["buyable"] = reason is None
     data["unavailable_reason"] = reason
     return data
+
+
+@router.get("/listings/{listing_id}/onchain")
+def verify_listing_onchain(listing_id: str, db: Session = Depends(get_db)):
+    """
+    Read this listing straight from the ticket's smart contract, so a buyer
+    can see for themselves, before paying, that the price is the one on
+    the chain and within the limits the organiser fixed at mint. Public:
+    anyone looking at a listing can check it.
+    """
+    transfer = db.query(Transfer).filter(Transfer.id == listing_id).first()
+    if not transfer or not transfer.ticket:
+        raise HTTPException(status_code=404, detail="Listing not found")
+    ticket = transfer.ticket
+    if not ticket.nft_token_id:
+        raise HTTPException(status_code=409, detail="This ticket is still being recorded on the blockchain.")
+    if not get_settings().BLOCKCHAIN_CONFIGURED:
+        raise HTTPException(status_code=503, detail="This server isn't connected to the blockchain.")
+    address = web3_service.ticket_contract_address(ticket)
+    try:
+        chain = web3_service.read_ticket_onchain(ticket.nft_token_id, contract_address=address)
+        settlement = (web3_service.read_settlement_onchain(transfer.settlement_tx_hash, address)
+                      if transfer.settlement_tx_hash else None)
+    except web3_service.ContractRevertError as e:
+        raise HTTPException(status_code=502, detail=f"The contract rejected the lookup: {e}")
+    except Exception:
+        logger.warning("On-chain listing lookup failed for %s", listing_id, exc_info=True)
+        raise HTTPException(status_code=503, detail="Couldn't reach the blockchain right now. Try again shortly.")
+
+    face = chain["face_price_kes"]
+    cap_kes = face * chain["resale_cap_bps"] // 10000
+    floor_kes = -(-face * chain["resale_floor_bps"] // 10000) if chain["resale_floor_bps"] is not None else None
+    price = int(round(transfer.transfer_price_kes or transfer.asking_price_kes))
+    tier = ticket.tier
+
+    checks = [{"label": f"Face value on the contract is KES {face:,}", "pass": bool(tier) and face == int(tier.price_kes)}]
+    limits = f"KES {floor_kes:,} to KES {cap_kes:,}" if floor_kes is not None else f"at most KES {cap_kes:,}"
+    checks.append({"label": f"KES {price:,} is within this ticket's on-chain limits ({limits})",
+                   "pass": price <= cap_kes and (floor_kes is None or price >= floor_kes)})
+    if transfer.status in _SETTLED_STATUSES:
+        checks.append({
+            "label": f"Sale settled on-chain at KES {price:,}",
+            "pass": bool(settlement) and settlement["token_id"] == ticket.nft_token_id and settlement["price_kes"] == price,
+            "pending": settlement is None and transfer.status == TransferStatus.PAID,
+        })
+    elif transfer.status == TransferStatus.LISTED or transfer.status == TransferStatus.PENDING_PAYMENT:
+        checks.append({"label": f"Listed on-chain at KES {price:,}", "pass": chain["listed_price_kes"] == price})
+    checks.append({"label": "Not used at a gate", "pass": not chain["used"]})
+
+    return {
+        "verified_at": datetime.now(timezone.utc),
+        "network": get_settings().BLOCKCHAIN_NETWORK_NAME,
+        "token_id": ticket.nft_token_id,
+        "contract_address": address,
+        "contract_url": web3_service.explorer_url("address", address),
+        "face_price_kes": face,
+        "floor_kes": floor_kes,
+        "cap_kes": cap_kes,
+        "listed_price_kes": chain["listed_price_kes"] or None,
+        "listing_tx_url": web3_service.explorer_url("tx", transfer.listing_tx_hash),
+        "settlement_tx_url": web3_service.explorer_url("tx", transfer.settlement_tx_hash),
+        "checks": checks,
+        "all_passed": all(c["pass"] or c.get("pending") for c in checks),
+    }
 
 
 @router.get("/purchases/{payment_id}")
@@ -520,12 +606,8 @@ def reprice_listing(
         raise HTTPException(status_code=409, detail="Ticket has no on-chain token")
 
     # Re-lists at the new price on-chain — re-running the exact same cap
-    # check a fresh listing gets, not just a database update.
-    try:
-        tx_hash = web3_service.list_for_resale_onchain(ticket.nft_token_id, int(round(body.price_kes)))
-    except web3_service.ContractRevertError as e:
-        _log_rejected_listing(db, current_user.id, ticket, body.price_kes, str(e))
-        raise HTTPException(status_code=400, detail=str(e))
+    # and floor checks a fresh listing gets, not just a database update.
+    tx_hash = _list_onchain(db, current_user.id, ticket, body.price_kes)
 
     transfer.asking_price_kes = round(body.price_kes)
     transfer.listing_tx_hash = tx_hash
@@ -606,6 +688,7 @@ async def buy_listing(
             amount=int(transfer.asking_price_kes),
             account_reference=transfer.id[:12],
             transaction_desc=f"Resale: {event_title}",
+            callback_url=mpesa_service.stk_callback_url(payment.id),
         )
     except Exception as e:
         db.rollback()

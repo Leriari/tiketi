@@ -15,6 +15,7 @@ import pytest
 
 from tests.test_api import client, TestingSessionLocal
 from app.models.models import Transfer, TransferStatus, TransferType, Ticket, TicketStatus, Payment, Event
+from app.services.mpesa import stk_callback_path
 
 API = "/api/v1"
 
@@ -34,6 +35,11 @@ def stub_external(monkeypatch):
         return {"MerchantRequestID": f"m-{uuid.uuid4().hex[:8]}", "CheckoutRequestID": f"c-{uuid.uuid4().hex[:10]}", "ResponseCode": "0"}
 
     monkeypatch.setattr(mpesa_svc, "stk_push", fake_stk_push)
+
+    async def fake_query(checkout_request_id):
+        return {"ResponseCode": "0", "ResultCode": "0", "ResultDesc": "The service request is processed successfully."}
+
+    monkeypatch.setattr(mpesa_svc, "query_stk_status", fake_query)
     monkeypatch.setattr(mint_ticket_nft, "delay", lambda *a, **kw: None)
     monkeypatch.setattr(settle_resale_transfer, "delay", lambda *a, **kw: None)
 
@@ -145,7 +151,7 @@ def test_unpaid_purchase_is_released_and_late_callback_ignored(people, event):
     assert status["status"] == "failed" and "in time" in status["failure_reason"]
 
     # A success callback arriving after that changes nothing.
-    client.post(f"{API}/payments/mpesa/callback", json={"Body": {"stkCallback": {
+    client.post(stk_callback_path(payment_id), json={"Body": {"stkCallback": {
         "MerchantRequestID": "m", "CheckoutRequestID": checkout_id, "ResultCode": 0, "ResultDesc": "OK",
         "CallbackMetadata": {"Item": [{"Name": "Amount", "Value": 1100}, {"Name": "MpesaReceiptNumber", "Value": "LATE123"}]},
     }}})
@@ -174,8 +180,8 @@ def test_duplicate_primary_callback_counts_once(people, event):
         "MerchantRequestID": "m", "CheckoutRequestID": checkout_id, "ResultCode": 0, "ResultDesc": "OK",
         "CallbackMetadata": {"Item": [{"Name": "Amount", "Value": 1000}, {"Name": "MpesaReceiptNumber", "Value": "DUP123"}]},
     }}}
-    client.post(f"{API}/payments/mpesa/callback", json=body)
-    client.post(f"{API}/payments/mpesa/callback", json=body)  # Daraja retry
+    client.post(stk_callback_path(payment_id), json=body)
+    client.post(stk_callback_path(payment_id), json=body)  # Daraja retry
     db = TestingSessionLocal()
     try:
         assert db.query(Event).filter(Event.id == event["id"]).one().tickets_sold == sold_before + 1

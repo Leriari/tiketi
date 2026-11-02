@@ -27,6 +27,8 @@ from app.services.platform_settings import flag_on
 settings = get_settings()
 
 DEFAULT_RESALE_MULTIPLIER = 1.2
+# Resale below face value isn't allowed unless the organiser lowers this.
+DEFAULT_RESALE_FLOOR_MULTIPLIER = 1.0
 DEFAULT_ROYALTY_PERCENT = 10.0
 
 
@@ -164,11 +166,16 @@ def apply_event_details(db: Session, event: Event, body: EventDetailsIn, *, crea
     multiplier = body.max_resale_multiplier if body.max_resale_multiplier is not None else (
         DEFAULT_RESALE_MULTIPLIER if creating else resale_multiplier(event)
     )
+    floor_multiplier = body.min_resale_multiplier if body.min_resale_multiplier is not None else (
+        DEFAULT_RESALE_FLOOR_MULTIPLIER if creating else event.resale_floor_multiplier
+    )
     royalty = body.resale_royalty_percent if body.resale_royalty_percent is not None else (
         DEFAULT_ROYALTY_PERCENT if creating else event.resale_royalty_percent
     )
     if not 1.0 <= multiplier <= 2.0:
         _bad("The maximum resale price must be between 100% and 200% of face value.")
+    if not 0 <= floor_multiplier <= 1.0:
+        _bad("The minimum resale price must be between 0% and 100% of face value.")
     if not 0 <= royalty <= 30:
         _bad("The organiser royalty must be between 0% and 30%.")
 
@@ -199,7 +206,7 @@ def apply_event_details(db: Session, event: Event, body: EventDetailsIn, *, crea
             tier.sales_start = _naive_utc(tin.salesStart)
             tier.sales_end = _naive_utc(tin.salesEnd)
             tier.sort_order = order
-            tier.resale_floor_price_kes = tier.price_kes
+            tier.resale_floor_price_kes = round(tier.price_kes * floor_multiplier, 2)
             tier.resale_ceiling_price_kes = round(tier.price_kes * multiplier, 2)
             tier.organizer_royalty_percent = royalty
 
@@ -215,7 +222,7 @@ def apply_event_details(db: Session, event: Event, body: EventDetailsIn, *, crea
         db.refresh(event)
 
     for tier in event.tiers:
-        tier.resale_floor_price_kes = tier.price_kes
+        tier.resale_floor_price_kes = round(tier.price_kes * floor_multiplier, 2)
         tier.resale_ceiling_price_kes = round(tier.price_kes * multiplier, 2)
         tier.organizer_royalty_percent = royalty
 
@@ -300,6 +307,7 @@ def event_out(event: Event, organisation: Organizer | None = None) -> dict:
         "max_resale_price_kes": event.max_resale_price_kes,
         "resale_royalty_percent": event.resale_royalty_percent or DEFAULT_ROYALTY_PERCENT,
         "resale_ceiling_multiplier": multiplier,
+        "resale_floor_multiplier": event.resale_floor_multiplier,
         "resale_enabled": bool(event.resale_enabled),
         # Event Approvals: pending | approved | rejected, or null when no
         # review applied. review_note is the admin's reason for a rejection.

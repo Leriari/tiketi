@@ -163,6 +163,7 @@ function eventSummary(ev, { includeHidden = false } = {}) {
     max_resale_price_kes: cheapest ? Math.round(cheapest.price * ev.resale.ceilingMultiplier) : 0,
     resale_royalty_percent: ev.resale.royaltyPercent,
     resale_ceiling_multiplier: ev.resale.ceilingMultiplier,
+    resale_floor_multiplier: ev.resale.floorMultiplier ?? 1,
     resale_enabled: ev.resale.resaleEnabled,
     resale_window_open_days: ev.resale.windowOpenDays,
     resale_window_close_hours: ev.resale.windowCloseHours,
@@ -722,6 +723,7 @@ export const mockApi = {
       gates: (payload.gates?.length ? payload.gates : [{ name: "Gate A" }]).map((g) => ({ id: g.id || uuid(), name: g.name })),
       resale: {
         ceilingMultiplier: payload.max_resale_multiplier ?? 1.2,
+        floorMultiplier: payload.min_resale_multiplier ?? 1,
         royaltyPercent: payload.resale_royalty_percent ?? 10,
         resaleEnabled: payload.resale_enabled ?? true,
         windowOpenDays: Number(payload.resale_window_open_days) || 0,
@@ -759,6 +761,7 @@ export const mockApi = {
       ev.resale = {
         ...ev.resale,
         ceilingMultiplier: payload.max_resale_multiplier ?? ev.resale.ceilingMultiplier,
+        floorMultiplier: payload.min_resale_multiplier ?? ev.resale.floorMultiplier ?? 1,
         royaltyPercent: payload.resale_royalty_percent ?? ev.resale.royaltyPercent,
         resaleEnabled: payload.resale_enabled ?? ev.resale.resaleEnabled,
         windowOpenDays: payload.resale_window_open_days != null ? Number(payload.resale_window_open_days) : ev.resale.windowOpenDays,
@@ -2141,6 +2144,8 @@ export const mockApi = {
     save();
     return { success: true, current: after };
   },
+
+  verifyResaleListingOnchain: async () => { throw new ApiError("On-chain checks need the real backend.", 503); },
 
   getPayoutRequests: async () => {
     requireUser();

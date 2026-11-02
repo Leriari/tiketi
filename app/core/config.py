@@ -28,7 +28,9 @@ class Settings(BaseSettings):
     MPESA_CONSUMER_SECRET: str = ""
     MPESA_SHORTCODE: str = "174379"
     MPESA_PASSKEY: str = ""
-    MPESA_CALLBACK_URL: str  # required — a placeholder default means callbacks silently never arrive
+    # Required. Its host is this API's public address (API_ORIGIN): each STK
+    # push gets its own callback URL there, with a secret token in the path.
+    MPESA_CALLBACK_URL: str
     MPESA_ENV: str = "sandbox"
 
     @property
@@ -54,12 +56,18 @@ class Settings(BaseSettings):
                     and self.MPESA_INITIATOR_NAME and self.MPESA_SECURITY_CREDENTIAL)
 
     @property
-    def PAYOUT_RESULT_BASE_URL(self) -> str:
-        """Where Safaricom sends payout results: this API's own address,
-        taken from MPESA_CALLBACK_URL (same server). Daraja refuses result
-        URLs containing words like "query", so nothing below uses them."""
+    def API_ORIGIN(self) -> str:
+        """This API's public address (https://host), taken from
+        MPESA_CALLBACK_URL. Each STK push and payout gets its own callback
+        URL under it (app/api/routes/payments.py, app/services/payouts.py)."""
         parts = urlsplit(self.MPESA_CALLBACK_URL)
-        return f"{parts.scheme}://{parts.netloc}/api/v1/payouts/results"
+        return f"{parts.scheme}://{parts.netloc}"
+
+    @property
+    def PAYOUT_RESULT_BASE_URL(self) -> str:
+        """Where Safaricom sends payout results. Daraja refuses result URLs
+        containing words like "query", so nothing below uses them."""
+        return f"{self.API_ORIGIN}/api/v1/payouts/results"
 
     # Card payments through Paystack Checkout (optional). The secret key is
     # from the Paystack dashboard → Settings → API Keys & Webhooks; use the
@@ -172,6 +180,10 @@ class Settings(BaseSettings):
     # additive, not load-bearing for the rest of the platform.
     BLOCKCHAIN_RPC_URL: str = ""
     NFT_CONTRACT_ADDRESS: str = ""
+    # The previous TiketiNFT (cap only, no resale floor), when tickets were
+    # minted on it before NFT_CONTRACT_ADDRESS was deployed. They stay on it
+    # (app/services/web3_service.py). Empty when there's only one contract.
+    NFT_LEGACY_CONTRACT_ADDRESS: str = ""
     MINTER_PRIVATE_KEY: str = ""
     # Block explorer for the chain above — links in ticket pages and emails.
     BLOCKCHAIN_EXPLORER_URL: str = "https://sepolia.basescan.org"

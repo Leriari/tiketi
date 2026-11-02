@@ -253,6 +253,8 @@ export const liveApi = {
   // Resale marketplace — buyer side.
   getResaleListings: ({ eventId, sort } = {}) => request(`/resale/listings${query({ event_id: eventId, sort })}`, { auth: false }),
   getResaleListing: (listingId) => request(`/resale/listings/${listingId}`, { auth: false }),
+  // Reads the listing back from the ticket's contract: price, floor and cap.
+  verifyResaleListingOnchain: (listingId) => request(`/resale/listings/${listingId}/onchain`, { auth: false }),
   buyResaleListing: (listingId, { phoneNumber }) =>
     request(`/resale/listings/${listingId}/buy`, { method: "POST", body: { phone_number: phoneNumber } }),
   // awaiting_payment -> transferring -> complete (or failed / delayed)
