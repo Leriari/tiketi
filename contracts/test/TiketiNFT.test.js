@@ -3,6 +3,7 @@ const { ethers } = require("hardhat");
 const { loadFixture } = require("@nomicfoundation/hardhat-network-helpers");
 
 const FACE_PRICE_KES = 1000n;
+const DEFAULT_FLOOR_BPS = 8000; // 80% of face value
 const DEFAULT_CAP_BPS = 11000; // 110% of face value
 const DEFAULT_ROYALTY_BPS = 1000; // 10%
 
@@ -21,13 +22,14 @@ async function mintOne(nft, minterWallet, to, overrides = {}) {
     eventId = 1,
     tierId = 1,
     facePriceKes = FACE_PRICE_KES,
+    resaleFloorBps = DEFAULT_FLOOR_BPS,
     resaleCapBps = DEFAULT_CAP_BPS,
     royaltyBps = DEFAULT_ROYALTY_BPS,
   } = overrides;
 
   const tx = await nft
     .connect(minterWallet)
-    .mintTicket(to.address, eventId, tierId, facePriceKes, resaleCapBps, royaltyBps);
+    .mintTicket(to.address, eventId, tierId, facePriceKes, resaleFloorBps, resaleCapBps, royaltyBps);
   const receipt = await tx.wait();
   const mintedEvent = receipt.logs
     .map((log) => {
@@ -56,6 +58,7 @@ describe("TiketiNFT", function () {
         eventId: 42,
         tierId: 3,
         facePriceKes: 2500n,
+        resaleFloorBps: 9000,
         resaleCapBps: 12000,
         royaltyBps: 800,
       });
@@ -63,6 +66,7 @@ describe("TiketiNFT", function () {
       expect(meta.eventId).to.equal(42n);
       expect(meta.tierId).to.equal(3n);
       expect(meta.facePriceKes).to.equal(2500n);
+      expect(meta.resaleFloorBps).to.equal(9000);
       expect(meta.resaleCapBps).to.equal(12000);
       expect(meta.used).to.equal(false);
       expect(meta.claimed).to.equal(false);
@@ -79,10 +83,10 @@ describe("TiketiNFT", function () {
     it("emits TicketMinted", async function () {
       const { nft, minterWallet, buyer } = await loadFixture(deployFixture);
       await expect(
-        nft.connect(minterWallet).mintTicket(buyer.address, 1, 1, FACE_PRICE_KES, DEFAULT_CAP_BPS, DEFAULT_ROYALTY_BPS)
+        nft.connect(minterWallet).mintTicket(buyer.address, 1, 1, FACE_PRICE_KES, DEFAULT_FLOOR_BPS, DEFAULT_CAP_BPS, DEFAULT_ROYALTY_BPS)
       )
         .to.emit(nft, "TicketMinted")
-        .withArgs(1n, buyer.address, 1n, 1n, FACE_PRICE_KES, DEFAULT_CAP_BPS, DEFAULT_ROYALTY_BPS);
+        .withArgs(1n, buyer.address, 1n, 1n, FACE_PRICE_KES, DEFAULT_FLOOR_BPS, DEFAULT_CAP_BPS, DEFAULT_ROYALTY_BPS);
     });
   });
 
@@ -126,6 +130,51 @@ describe("TiketiNFT", function () {
       await expect(
         nft.connect(buyer).listForResale(tokenId, FACE_PRICE_KES * 100n)
       ).to.be.revertedWith("TiketiNFT: price exceeds resale cap");
+    });
+
+    // The floor stops a ticket being dumped below what the organiser allows
+    // (e.g. to move it off-platform for cash): enforced the same way as the cap.
+    const floorValues = [5000, 8000, 10000]; // 50%, 80%, 100%
+    for (const floorBps of floorValues) {
+      describe(`with a ${floorBps / 100}% floor`, function () {
+        it("allows a listing at exactly the floor", async function () {
+          const { nft, minterWallet, buyer } = await loadFixture(deployFixture);
+          const tokenId = await mintOne(nft, minterWallet, buyer, { resaleFloorBps: floorBps });
+          const floorPrice = (FACE_PRICE_KES * BigInt(floorBps)) / 10000n;
+          await expect(nft.connect(buyer).listForResale(tokenId, floorPrice)).to.emit(nft, "ListedForResale");
+        });
+
+        it("reverts a listing one shilling below the floor", async function () {
+          const { nft, minterWallet, buyer } = await loadFixture(deployFixture);
+          const tokenId = await mintOne(nft, minterWallet, buyer, { resaleFloorBps: floorBps });
+          const floorPrice = (FACE_PRICE_KES * BigInt(floorBps)) / 10000n;
+          await expect(
+            nft.connect(buyer).listForResale(tokenId, floorPrice - 1n)
+          ).to.be.revertedWith("TiketiNFT: price below resale floor");
+          expect(await nft.listingPriceKes(tokenId)).to.equal(0n);
+        });
+      });
+    }
+
+    it("rounds a fractional floor up, so it is never undercut", async function () {
+      const { nft, minterWallet, buyer } = await loadFixture(deployFixture);
+      // 33.33% of KES 1,000 is KES 333.3: KES 333 is below it, KES 334 is not.
+      const tokenId = await mintOne(nft, minterWallet, buyer, { resaleFloorBps: 3333 });
+      await expect(nft.connect(buyer).listForResale(tokenId, 333n)).to.be.revertedWith("TiketiNFT: price below resale floor");
+      await expect(nft.connect(buyer).listForResale(tokenId, 334n)).to.emit(nft, "ListedForResale");
+    });
+
+    it("a zero floor allows any positive price", async function () {
+      const { nft, minterWallet, buyer } = await loadFixture(deployFixture);
+      const tokenId = await mintOne(nft, minterWallet, buyer, { resaleFloorBps: 0 });
+      await expect(nft.connect(buyer).listForResale(tokenId, 1n)).to.emit(nft, "ListedForResale");
+    });
+
+    it("cannot mint a ticket whose floor is above its cap", async function () {
+      const { nft, minterWallet, buyer } = await loadFixture(deployFixture);
+      await expect(
+        nft.connect(minterWallet).mintTicket(buyer.address, 1, 1, FACE_PRICE_KES, 12000, 11000, DEFAULT_ROYALTY_BPS)
+      ).to.be.revertedWith("TiketiNFT: floor above cap");
     });
 
     it("only the token owner can list it", async function () {
@@ -299,7 +348,7 @@ describe("TiketiNFT", function () {
     it("mintTicket reverts for a non-minter", async function () {
       const { nft, buyer, other } = await loadFixture(deployFixture);
       await expect(
-        nft.connect(other).mintTicket(buyer.address, 1, 1, FACE_PRICE_KES, DEFAULT_CAP_BPS, DEFAULT_ROYALTY_BPS)
+        nft.connect(other).mintTicket(buyer.address, 1, 1, FACE_PRICE_KES, DEFAULT_FLOOR_BPS, DEFAULT_CAP_BPS, DEFAULT_ROYALTY_BPS)
       ).to.be.revertedWith("TiketiNFT: caller is not the minter");
     });
 
@@ -324,7 +373,7 @@ describe("TiketiNFT", function () {
       expect(await nft.minter()).to.equal(thirdParty.address);
 
       await expect(
-        nft.connect(thirdParty).mintTicket(buyer.address, 1, 1, FACE_PRICE_KES, DEFAULT_CAP_BPS, DEFAULT_ROYALTY_BPS)
+        nft.connect(thirdParty).mintTicket(buyer.address, 1, 1, FACE_PRICE_KES, DEFAULT_FLOOR_BPS, DEFAULT_CAP_BPS, DEFAULT_ROYALTY_BPS)
       ).to.not.be.reverted;
     });
   });

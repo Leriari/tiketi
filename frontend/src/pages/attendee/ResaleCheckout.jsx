@@ -5,6 +5,7 @@ import { api, ApiError } from "../../api";
 import { useAuth } from "../../context/AuthContext";
 import { useApiData } from "../../lib/useApiData";
 import { Card, MoneyText, Input, Checkbox, Button, Modal, CountdownRing, Skeleton, ErrorState, EmptyState } from "../../components/ui";
+import ListingOnChainCheck from "../../components/ListingOnChainCheck";
 import EventCover from "../../components/EventCover";
 import { isValidKenyanPhone, normalizeKenyanPhone, maskPhone, formatPhone, formatEventDate } from "../../format";
 
@@ -182,6 +183,8 @@ export default function ResaleCheckout() {
           </div>
         </div>
       </Card>
+
+      <ListingOnChainCheck listingId={listing.id} listingTxUrl={listing.listing_tx_url} />
 
       <div className="flex items-start gap-2 rounded-md bg-chain-verified/5 border border-chain-verified/30 px-4 py-3 text-body-sm text-ink-secondary">
         <ShieldCheck size={16} className="text-chain-verified flex-none mt-0.5" />

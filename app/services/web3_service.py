@@ -19,6 +19,14 @@ flow). This mirrors the custodial-wallet pattern already used everywhere
 else in this project rather than generating and storing a private key per
 user, which this codebase has no infrastructure for and which raises
 security questions well beyond this integration's scope.
+
+Contract versions: new tickets are minted on NFT_CONTRACT_ADDRESS (the
+current TiketiNFT, with an on-chain resale floor as well as a cap).
+Tickets minted before it was deployed stay on the contract they were
+minted on: Ticket.nft_contract_address, or NFT_LEGACY_CONTRACT_ADDRESS when
+that's empty (tickets from before the column existed). Every call below
+takes the ticket's own contract address, and that older contract is read
+with its own ABI (abi/TiketiNFT.v1.json: no floor).
 """
 import json
 import logging
@@ -36,12 +44,12 @@ from app.core.config import get_settings
 settings = get_settings()
 logger = logging.getLogger(__name__)
 
-_ABI_PATH = Path(__file__).parent / "abi" / "TiketiNFT.json"
+_ABI_DIR = Path(__file__).parent / "abi"
 
 
 @lru_cache
-def _load_abi():
-    with open(_ABI_PATH) as f:
+def _load_abi(name: str = "TiketiNFT.json"):
+    with open(_ABI_DIR / name) as f:
         return json.load(f)
 
 
@@ -50,12 +58,29 @@ def _get_web3() -> Web3:
     return Web3(Web3.HTTPProvider(settings.BLOCKCHAIN_RPC_URL))
 
 
+def _is_current(address: str | None) -> bool:
+    return not address or address.lower() == settings.NFT_CONTRACT_ADDRESS.lower()
+
+
+def ticket_contract_address(ticket) -> str:
+    """The contract this ticket was minted on (see the module docstring)."""
+    return ticket.nft_contract_address or settings.NFT_LEGACY_CONTRACT_ADDRESS or settings.NFT_CONTRACT_ADDRESS
+
+
+def has_onchain_floor(address: str | None) -> bool:
+    """Whether the contract at this address enforces a resale floor."""
+    return _is_current(address)
+
+
 @lru_cache
-def _get_contract():
+def _get_contract(address: str | None = None):
+    """The contract at `address` (default: the current one), with the ABI
+    of its version."""
     w3 = _get_web3()
+    current = _is_current(address)
     return w3.eth.contract(
-        address=Web3.to_checksum_address(settings.NFT_CONTRACT_ADDRESS),
-        abi=_load_abi(),
+        address=Web3.to_checksum_address(settings.NFT_CONTRACT_ADDRESS if current else address),
+        abi=_load_abi("TiketiNFT.json" if current else "TiketiNFT.v1.json"),
     )
 
 
@@ -157,13 +182,14 @@ def mint_ticket_onchain(
     event_id: str,
     tier_id: str,
     face_price_kes: int,
+    resale_floor_bps: int,
     resale_cap_bps: int,
     royalty_bps: int,
 ) -> tuple[int, str]:
     """
-    Mint a ticket NFT. Returns (token_id, tx_hash). Raises on any failure —
-    the caller decides what to do (the Celery task lets it raise, so
-    Celery's own retry policy on mint_ticket_nft applies).
+    Mint a ticket NFT on the current contract. Returns (token_id, tx_hash).
+    Raises on any failure — the caller decides what to do (the Celery task
+    lets it raise, so Celery's own retry policy on mint_ticket_nft applies).
     """
     _require_configured()
     contract = _get_contract()
@@ -174,6 +200,7 @@ def mint_ticket_onchain(
         _uuid_to_uint256(event_id),
         _uuid_to_uint256(tier_id),
         int(face_price_kes),
+        int(resale_floor_bps),
         int(resale_cap_bps),
         int(royalty_bps),
     )
@@ -189,16 +216,16 @@ def mint_ticket_onchain(
     return token_id, tx_hash
 
 
-def mark_used_onchain(token_id: int) -> str:
+def mark_used_onchain(token_id: int, contract_address: str | None = None) -> str:
     """Mark a token used on-chain. Returns the tx hash. Raises on failure."""
     _require_configured()
-    contract = _get_contract()
+    contract = _get_contract(contract_address)
     fn = contract.functions.markUsed(token_id)
     receipt = _send_transaction(fn)
     return receipt["transactionHash"].hex()
 
 
-def list_for_resale_onchain(token_id: int, price_kes: int) -> str:
+def list_for_resale_onchain(token_id: int, price_kes: int, contract_address: str | None = None) -> str:
     """
     List a custodial ticket for resale. Returns the tx hash on success.
 
@@ -206,14 +233,15 @@ def list_for_resale_onchain(token_id: int, price_kes: int) -> str:
     importantly when it exceeds this ticket's on-chain resale cap. That
     revert IS the anti-scalping enforcement (Work Order 02's central rule):
     this function must never pre-validate the price itself and skip the
-    call, only relay whatever the chain decides.
+    call, only relay whatever the chain decides. The current contract also
+    rejects a price below the ticket's resale floor.
 
     Simulates the call first (a free eth_call, no gas spent) so a reverting
     price is caught with its exact message before any real transaction is
     sent, rather than only after paying to find out.
     """
     _require_configured()
-    contract = _get_contract()
+    contract = _get_contract(contract_address)
     account = Account.from_key(settings.MINTER_PRIVATE_KEY)
     fn = contract.functions.listForResale(int(token_id), int(price_kes))
 
@@ -226,7 +254,7 @@ def list_for_resale_onchain(token_id: int, price_kes: int) -> str:
     return receipt["transactionHash"].hex()
 
 
-def settle_custodial_resale_onchain(token_id: int) -> str:
+def settle_custodial_resale_onchain(token_id: int, contract_address: str | None = None) -> str:
     """
     Settle a resale that was paid for off-chain in KES. Returns the tx hash.
     Raises on failure (including ContractRevertError if, e.g., the listing
@@ -234,7 +262,7 @@ def settle_custodial_resale_onchain(token_id: int) -> str:
     is responsible for retrying or marking the transfer settlement_failed.
     """
     _require_configured()
-    contract = _get_contract()
+    contract = _get_contract(contract_address)
     fn = contract.functions.settleCustodialResale(int(token_id))
     try:
         receipt = _send_transaction(fn)
@@ -249,7 +277,7 @@ def custodian_address() -> str:
     return Account.from_key(settings.MINTER_PRIVATE_KEY).address
 
 
-def read_ticket_onchain(token_id: int, mint_tx_hash: str | None = None) -> dict:
+def read_ticket_onchain(token_id: int, mint_tx_hash: str | None = None, contract_address: str | None = None) -> dict:
     """
     Read a ticket straight from the contract — no database involved — so a
     holder can check ChainTix's records against the chain itself. Raises
@@ -257,10 +285,15 @@ def read_ticket_onchain(token_id: int, mint_tx_hash: str | None = None) -> dict:
     """
     _require_configured()
     w3 = _get_web3()
-    contract = _get_contract()
+    contract = _get_contract(contract_address)
     try:
         owner = contract.functions.ownerOf(int(token_id)).call()
-        event_ref, tier_ref, face_price_kes, resale_cap_bps, used, claimed = contract.functions.ticketMeta(int(token_id)).call()
+        meta = contract.functions.ticketMeta(int(token_id)).call()
+        if has_onchain_floor(contract_address):
+            event_ref, tier_ref, face_price_kes, resale_floor_bps, resale_cap_bps, used, claimed = meta
+        else:
+            event_ref, tier_ref, face_price_kes, resale_cap_bps, used, claimed = meta
+            resale_floor_bps = None
         listed_price_kes = contract.functions.listingPriceKes(int(token_id)).call()
         _, royalty = contract.functions.royaltyInfo(int(token_id), 10_000).call()
     except ContractLogicError as exc:
@@ -280,6 +313,7 @@ def read_ticket_onchain(token_id: int, mint_tx_hash: str | None = None) -> dict:
         "event_ref": event_ref,
         "tier_ref": tier_ref,
         "face_price_kes": face_price_kes,
+        "resale_floor_bps": resale_floor_bps,  # None: this contract has no floor
         "resale_cap_bps": resale_cap_bps,
         "royalty_bps": royalty,
         "used": used,
@@ -293,3 +327,31 @@ def read_ticket_onchain(token_id: int, mint_tx_hash: str | None = None) -> dict:
 def chain_ref(value: str) -> int:
     """The uint256 an off-chain id is recorded as on-chain (see _uuid_to_uint256)."""
     return _uuid_to_uint256(value)
+
+
+def explorer_url(kind: str, value: str | None) -> str | None:
+    """A block-explorer link: kind is "tx", "address" or "token"."""
+    return f"{settings.BLOCKCHAIN_EXPLORER_URL.rstrip('/')}/{kind}/{value}" if value else None
+
+
+def read_settlement_onchain(tx_hash: str, contract_address: str | None = None) -> dict | None:
+    """
+    Decode a resale settlement transaction straight from the chain: which
+    token it settled and at what KES price (CustodialResaleSettled), and
+    when. None if the transaction has no such event from this contract.
+    """
+    _require_configured()
+    w3 = _get_web3()
+    contract = _get_contract(contract_address)
+    receipt = w3.eth.get_transaction_receipt(tx_hash)
+    events = contract.events.CustodialResaleSettled().process_receipt(receipt)
+    if not events:
+        return None
+    args = events[0]["args"]
+    block = w3.eth.get_block(receipt["blockNumber"])
+    return {
+        "token_id": int(args["tokenId"]),
+        "price_kes": int(args["salePriceKes"]),
+        "block": receipt["blockNumber"],
+        "at": block["timestamp"],
+    }

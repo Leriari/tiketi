@@ -8,12 +8,14 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 
 /// @title TiketiNFT — ChainTix event ticket, ERC-721 + ERC-2981 royalties
 /// @notice Each token is one ticket. Anti-scalping is enforced on-chain:
-///         a resale listing above its face-value cap simply cannot be created.
+///         a resale listing above its cap, or below its floor (both set
+///         from face value at mint, by the organiser), cannot be created.
 contract TiketiNFT is ERC721, ERC2981, Ownable, ReentrancyGuard {
     struct TicketMeta {
         uint256 eventId;
         uint256 tierId;
         uint256 facePriceKes;
+        uint16 resaleFloorBps; // basis points of facePriceKes, e.g. 8000 = 80%; 0 = no floor
         uint16 resaleCapBps; // basis points of facePriceKes, e.g. 11000 = 110% (a 10% uplift ceiling)
         bool used;
         bool claimed;
@@ -44,6 +46,7 @@ contract TiketiNFT is ERC721, ERC2981, Ownable, ReentrancyGuard {
         uint256 indexed eventId,
         uint256 tierId,
         uint256 facePriceKes,
+        uint16 resaleFloorBps,
         uint16 resaleCapBps,
         uint96 royaltyBps
     );
@@ -71,16 +74,19 @@ contract TiketiNFT is ERC721, ERC2981, Ownable, ReentrancyGuard {
         minter = _minter;
     }
 
-    /// @notice Mint a new ticket. Minter-only.
+    /// @notice Mint a new ticket. Minter-only. The resale floor and cap are
+    /// fixed here for the token's lifetime: nobody can change them later.
     function mintTicket(
         address to,
         uint256 eventId,
         uint256 tierId,
         uint256 facePriceKes,
+        uint16 resaleFloorBps,
         uint16 resaleCapBps,
         uint96 royaltyBps
     ) external onlyMinter returns (uint256) {
         require(to != address(0), "TiketiNFT: cannot mint to zero address");
+        require(resaleFloorBps <= resaleCapBps, "TiketiNFT: floor above cap");
 
         uint256 tokenId = _nextTokenId++;
         _safeMint(to, tokenId);
@@ -89,6 +95,7 @@ contract TiketiNFT is ERC721, ERC2981, Ownable, ReentrancyGuard {
             eventId: eventId,
             tierId: tierId,
             facePriceKes: facePriceKes,
+            resaleFloorBps: resaleFloorBps,
             resaleCapBps: resaleCapBps,
             used: false,
             claimed: false
@@ -98,12 +105,12 @@ contract TiketiNFT is ERC721, ERC2981, Ownable, ReentrancyGuard {
         // `minter` doc comment above for why there's no separate receiver param.
         _setTokenRoyalty(tokenId, minter, royaltyBps);
 
-        emit TicketMinted(tokenId, to, eventId, tierId, facePriceKes, resaleCapBps, royaltyBps);
+        emit TicketMinted(tokenId, to, eventId, tierId, facePriceKes, resaleFloorBps, resaleCapBps, royaltyBps);
         return tokenId;
     }
 
-    /// @notice List an owned, unused ticket for resale. Reverts above the cap —
-    /// this revert IS the anti-scalping enforcement.
+    /// @notice List an owned, unused ticket for resale. Reverts above the cap
+    /// or below the floor — this revert IS the anti-scalping enforcement.
     function listForResale(uint256 tokenId, uint256 priceKes) external {
         require(_exists(tokenId), "TiketiNFT: token does not exist");
         require(ownerOf(tokenId) == msg.sender, "TiketiNFT: caller is not token owner");
@@ -113,6 +120,9 @@ contract TiketiNFT is ERC721, ERC2981, Ownable, ReentrancyGuard {
         TicketMeta storage meta = ticketMeta[tokenId];
         uint256 cap = (meta.facePriceKes * meta.resaleCapBps) / 10000;
         require(priceKes <= cap, "TiketiNFT: price exceeds resale cap");
+        // Rounded up, so a floor is never undercut by integer division.
+        uint256 floor = (meta.facePriceKes * meta.resaleFloorBps + 9999) / 10000;
+        require(priceKes >= floor, "TiketiNFT: price below resale floor");
 
         listingPriceKes[tokenId] = priceKes;
         emit ListedForResale(tokenId, msg.sender, priceKes);

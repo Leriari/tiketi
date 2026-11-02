@@ -221,6 +221,12 @@
       {
         "indexed": false,
         "internalType": "uint16",
+        "name": "resaleFloorBps",
+        "type": "uint16"
+      },
+      {
+        "indexed": false,
+        "internalType": "uint16",
         "name": "resaleCapBps",
         "type": "uint16"
       },
@@ -460,6 +466,11 @@
         "internalType": "uint256",
         "name": "facePriceKes",
         "type": "uint256"
+      },
+      {
+        "internalType": "uint16",
+        "name": "resaleFloorBps",
+        "type": "uint16"
       },
       {
         "internalType": "uint16",
@@ -728,6 +739,11 @@
         "internalType": "uint256",
         "name": "facePriceKes",
         "type": "uint256"
+      },
+      {
+        "internalType": "uint16",
+        "name": "resaleFloorBps",
+        "type": "uint16"
       },
       {
         "internalType": "uint16",

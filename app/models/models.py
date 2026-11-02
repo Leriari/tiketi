@@ -345,6 +345,14 @@ class Event(Base):
         return 1.2
 
     @property
+    def resale_floor_multiplier(self) -> float:
+        """Lowest resale price as a multiple of face value (1.0 = face value)."""
+        tier = self.default_tier
+        if tier and tier.price_kes:
+            return round((tier.resale_floor_price_kes or 0) / tier.price_kes, 2)
+        return 1.0
+
+    @property
     def availability(self) -> str:
         """'available' | 'selling_fast' | 'sold_out' — what event cards badge."""
         remaining = self.total_capacity - self.tickets_sold
@@ -454,6 +462,9 @@ class Ticket(Base):
     # NFT details (populated in the smart-contract phase of the roadmap)
     nft_token_id: Mapped[int | None] = mapped_column(Integer)
     nft_tx_hash: Mapped[str | None] = mapped_column(String(66))
+    # Which TiketiNFT contract it was minted on. Null for tickets minted
+    # before this was recorded: web3_service.ticket_contract_address.
+    nft_contract_address: Mapped[str | None] = mapped_column(String(42))
     # The markUsed transaction once the ticket was admitted at the gate.
     used_tx_hash: Mapped[str | None] = mapped_column(String(66))
 

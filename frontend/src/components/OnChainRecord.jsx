@@ -1,7 +1,8 @@
 import { useState } from "react";
-import { ShieldCheck, Check, X, Clock, ExternalLink, Loader2 } from "lucide-react";
+import { ShieldCheck, Loader2 } from "lucide-react";
 import { api, ApiError } from "../api";
 import { Button, ChainBadge, CopyButton } from "./ui";
+import ChainChecks, { ExplorerLink as Link } from "./ChainChecks";
 
 function short(value) {
   return value ? `${value.slice(0, 6)}…${value.slice(-4)}` : "—";
@@ -13,15 +14,6 @@ function Row({ label, children }) {
       <span className="text-caption text-ink-tertiary flex-none">{label}</span>
       <span className="text-body-sm text-ink-primary font-medium tabular-nums text-right min-w-0 truncate">{children}</span>
     </div>
-  );
-}
-
-function Link({ href, children }) {
-  if (!href) return children;
-  return (
-    <a href={href} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-brand-primary-on-tint hover:underline">
-      {children} <ExternalLink size={12} aria-hidden="true" />
-    </a>
   );
 }
 
@@ -93,19 +85,23 @@ export default function OnChainRecord({ ticketId, detail }) {
 
       {result && (
         <div className="flex flex-col gap-2 pt-1" aria-live="polite">
-          <p className={`text-body-sm font-semibold ${result.all_passed ? "text-chain-verified" : "text-danger"}`}>
-            {result.all_passed ? "Everything matches the blockchain." : "Something doesn't match. Contact ChainTix support."}
+          <ChainChecks result={result} />
+          <p className="text-caption text-ink-tertiary">
+            Fixed on the contract for this ticket: resale{" "}
+            {result.resale_floor_percent != null ? `from ${result.resale_floor_percent}% ` : ""}up to {result.resale_cap_percent}% of face value,
+            organiser royalty {result.royalty_percent}%.
           </p>
-          <ul className="flex flex-col gap-1.5">
-            {result.checks.map((c) => (
-              <li key={c.label} className="flex items-start gap-2 text-body-sm text-ink-secondary">
-                {c.pass ? <Check size={15} className="text-chain-verified flex-none mt-0.5" aria-label="Passed" />
-                  : c.pending ? <Clock size={15} className="text-warning flex-none mt-0.5" aria-label="Pending" />
-                    : <X size={15} className="text-danger flex-none mt-0.5" aria-label="Failed" />}
-                <span>{c.label}{c.pending ? " (being recorded)" : ""}</span>
-              </li>
-            ))}
-          </ul>
+          {result.resales?.length > 0 && (
+            <ul className="flex flex-col gap-1 text-caption text-ink-tertiary">
+              {result.resales.map((r) => (
+                <li key={r.listed_at}>
+                  {r.sold_at ? "Resold" : "Listed"} for KES {r.price_kes.toLocaleString("en-KE")}:{" "}
+                  <Link href={r.listing_tx_url}>listing</Link>
+                  {r.settlement_tx_url && <> · <Link href={r.settlement_tx_url}>settlement</Link></>}
+                </li>
+              ))}
+            </ul>
+          )}
           <div className="text-caption text-ink-tertiary flex flex-wrap items-center gap-x-2 gap-y-1">
             <span>Held by {short(result.owner)}</span>
             <CopyButton value={result.owner} label="Copy address" />

@@ -154,6 +154,8 @@ class EventDetailsIn(BaseModel):
     status: Optional[str] = None  # UI vocabulary: draft|live|paused|sold_out|cancelled
     total_capacity: Optional[int] = None
     max_resale_multiplier: Optional[float] = None
+    # The lowest resale price, as a multiple of face value (0.8 = 80%).
+    min_resale_multiplier: Optional[float] = None
     resale_royalty_percent: Optional[float] = None
     resale_enabled: Optional[bool] = None
     resale_window_open_days: Optional[int] = None

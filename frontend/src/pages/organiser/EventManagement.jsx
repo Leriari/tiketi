@@ -46,6 +46,7 @@ export default function EventManagement() {
   const [capacity, setCapacity] = useState("");
   const [resaleEnabled, setResaleEnabled] = useState(true);
   const [resaleCapPct, setResaleCapPct] = useState(120);
+  const [resaleFloorPct, setResaleFloorPct] = useState(100);
   const [royaltyPct, setRoyaltyPct] = useState(10);
   const [windowOpenDays, setWindowOpenDays] = useState(0);
   const [windowCloseHours, setWindowCloseHours] = useState(2);
@@ -69,6 +70,7 @@ export default function EventManagement() {
       setCapacity(String(ev.total_capacity));
       setResaleEnabled(ev.resale_enabled);
       setResaleCapPct(Math.round(ev.resale_ceiling_multiplier * 100));
+      setResaleFloorPct(Math.round((ev.resale_floor_multiplier ?? 1) * 100));
       setRoyaltyPct(ev.resale_royalty_percent);
       setWindowOpenDays(ev.resale_window_open_days);
       setWindowCloseHours(ev.resale_window_close_hours);
@@ -152,6 +154,7 @@ export default function EventManagement() {
       status: nextStatus,
       total_capacity: capacity || tiers.reduce((s, t) => s + Number(t.capacity || 0), 0),
       max_resale_multiplier: resaleCapPct / 100,
+      min_resale_multiplier: resaleFloorPct / 100,
       resale_royalty_percent: Number(royaltyPct),
       resale_enabled: resaleEnabled,
       resale_window_open_days: windowOpenDays,
@@ -313,13 +316,18 @@ export default function EventManagement() {
                   <span className="text-caption text-ink-secondary tabular-nums">{resaleCapPct}% of face value</span>
                 </div>
                 <div className="flex flex-col gap-1.5">
+                  <label className="text-label uppercase tracking-[0.06em] font-medium text-ink-tertiary">Minimum resale price</label>
+                  <input type="range" aria-label="Minimum resale price" min={0} max={100} step={5} value={resaleFloorPct} onChange={(e) => markDirty(setResaleFloorPct)(Number(e.target.value))} className="accent-brand-primary" />
+                  <span className="text-caption text-ink-secondary tabular-nums">{resaleFloorPct === 0 ? "No minimum" : `${resaleFloorPct}% of face value`}</span>
+                </div>
+                <div className="flex flex-col gap-1.5">
                   <label className="text-label uppercase tracking-[0.06em] font-medium text-ink-tertiary">Organiser royalty</label>
                   <input type="range" aria-label="Organiser royalty" min={0} max={30} value={royaltyPct} onChange={(e) => markDirty(setRoyaltyPct)(Number(e.target.value))} className="accent-brand-primary" />
                   <span className="text-caption text-ink-secondary tabular-nums">{royaltyPct}%</span>
                 </div>
                 <Input label="Resale opens (days after sale)" type="number" min={0} value={windowOpenDays} onChange={(e) => markDirty(setWindowOpenDays)(Number(e.target.value))} />
                 <Input label="Resale closes (hours before event)" type="number" min={0} value={windowCloseHours} onChange={(e) => markDirty(setWindowCloseHours)(Number(e.target.value))} />
-                <p className="sm:col-span-2 text-caption text-ink-tertiary">Once the event goes live these values are written to the smart contract and cannot be increased.</p>
+                <p className="sm:col-span-2 text-caption text-ink-tertiary">Each ticket's minimum and maximum resale price are written to the smart contract when it's bought, and can't be changed for that ticket afterwards. A change here applies to tickets bought from then on.</p>
               </div>
             )}
           </section>

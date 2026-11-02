@@ -265,7 +265,7 @@ These are set in `.env.production`:
   for testers who can't receive sandbox prompts. Sandbox only.
 - Only the Firebase site may call the API (`CORS_ORIGINS`).
 
-Known gap before any real-money use: the M-Pesa callback isn't yet checked
-against Daraja, so a forged callback can mark a payment paid. That's
-harmless on the sandbox, but it must be fixed before switching
-`MPESA_ENV=production`.
+M-Pesa callbacks aren't signed by Safaricom, so each payment prompt gets
+its own callback address with a secret token, and a "paid" callback only
+counts if its checkout and amount match and Daraja, asked directly (STK
+Push Query), agrees. Payouts work the same way.
