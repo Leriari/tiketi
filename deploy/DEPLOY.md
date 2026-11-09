@@ -87,7 +87,7 @@ Then, on the server:
 
 ```bash
 ssh-keyscan github.com >> ~/.ssh/known_hosts
-git clone git@github.com:Leriari/tiketi.git ~/tiketi
+git clone --branch production git@github.com:Leriari/tiketi.git ~/tiketi
 bash ~/tiketi/deploy/setup-server.sh
 exit        # log out and back in so Docker works without sudo
 ```
@@ -249,12 +249,35 @@ docker compose --env-file .env.production -f docker-compose.prod.yml exec api \
 
 | Task | Command (on the server, in `~/tiketi/deploy`) |
 |---|---|
-| Deploy new backend code | `./up.sh` (pulls from GitHub, rebuilds, migrates) |
-| Deploy new frontend | `bash deploy/deploy-frontend.sh` (on your PC) |
+| Deploy new backend code | `./up.sh` (pulls the `production` branch, rebuilds, migrates) |
+| Deploy new frontend | `bash deploy/deploy-frontend.sh` (on your PC; only if `frontend/` matches `production`) |
 | See logs | `docker compose --env-file .env.production -f docker-compose.prod.yml logs -f api worker` |
 | Restart | `docker compose --env-file .env.production -f docker-compose.prod.yml restart` |
 | Backups | Daily, in `~/tiketi/deploy/backups/`, kept 14 days |
 | Restore a backup | `gunzip -c backups/tiketi-DATE.sql.gz \| docker compose --env-file .env.production -f docker-compose.prod.yml exec -T db psql -U tiketi tiketi` |
+
+## Releasing
+
+Two branches: **main** is where work happens; **production** is what's
+live. The server runs `production`, and the site is built from it. Work
+reaches users only when you move `production` up to `main`:
+
+```bash
+# On your PC, with main pushed:
+git push origin main:production          # refuses unless it's a plain fast-forward
+# On the server:
+cd ~/tiketi/deploy && ./up.sh
+# On your PC, if anything in frontend/ changed:
+bash deploy/deploy-frontend.sh
+```
+
+To release less than all of main, push a specific commit instead:
+`git push origin <commit>:production`. To go back to the previous
+release, push that commit with `--force` and run `./up.sh` again (a
+database migration isn't undone that way).
+
+A fix that can't wait for main: branch from `production`, commit, push it
+to `production`, deploy, then merge `production` back into `main`.
 
 **Keep it alive until January:** Oracle may reclaim Always Free instances
 it considers idle (CPU, network and memory all very low for 7 days). A demo

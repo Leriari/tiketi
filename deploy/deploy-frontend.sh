@@ -8,6 +8,15 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# The site must match the API, which runs the production branch. This
+# builds the frontend/ folder you have here, so it must be production's.
+git fetch -q origin production
+if ! git diff --quiet origin/production -- frontend; then
+  echo "Your frontend/ differs from the production branch, which is what the API runs." >&2
+  echo "Release first (DEPLOY.md, \"Releasing\"), or check out production, then run this again." >&2
+  exit 1
+fi
+
 api_domain=$(grep -E '^API_DOMAIN=' deploy/.env.production | cut -d= -f2)
 if [ -z "$api_domain" ]; then
   echo "API_DOMAIN not found in deploy/.env.production — run make_env.py first." >&2
