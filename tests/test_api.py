@@ -141,6 +141,18 @@ def test_list_events_empty():
     assert isinstance(res.json(), list)
 
 
+def test_list_events_leaves_out_finished_events(auth_headers, test_org, test_event):
+    """test_event is in 2025: finished. Its own page still opens."""
+    upcoming = client.post("/api/v1/events/", json={
+        "organization_id": test_org["id"], "title": "Upcoming Meetup", "venue": "iHub",
+        "event_date": "2030-01-01T18:00:00", "ticket_price_kes": 500, "total_capacity": 10,
+    }, headers=auth_headers).json()
+    listed = [e["id"] for e in client.get("/api/v1/events/").json()]
+    assert upcoming["id"] in listed
+    assert test_event["id"] not in listed
+    assert client.get(f"/api/v1/events/{test_event['id']}").status_code == 200
+
+
 def test_create_event(test_event):
     assert test_event["title"] == "Nairobi Tech Meetup"
     assert test_event["ticket_price_kes"] == 500

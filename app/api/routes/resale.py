@@ -129,6 +129,42 @@ def _resale_rule_reason(ticket: Ticket) -> str | None:
     return None
 
 
+def _resale_limits(ticket: Ticket, *, look_up: bool = True) -> dict:
+    """This ticket's face value and allowed resale range in KES: the ones
+    fixed on its contract at mint, not its tier's current ones, which the
+    organiser may have changed since. A ticket minted before these were
+    recorded is read from the chain once (look_up) and remembered. The
+    first contract has no floor on-chain, so its tickets use the tier's
+    (checked in _list_onchain). Unminted tickets: the tier's."""
+    tier = ticket.tier
+    if look_up and ticket.onchain_cap_kes is None and ticket.nft_token_id:
+        try:
+            chain = web3_service.read_ticket_onchain(
+                ticket.nft_token_id, contract_address=web3_service.ticket_contract_address(ticket)
+            )
+        except Exception as e:
+            logger.warning(f"Couldn't read ticket {ticket.id}'s resale limits from the chain: {e}")
+        else:
+            face = chain["face_price_kes"]
+            ticket.onchain_face_kes = face
+            ticket.onchain_cap_kes = face * chain["resale_cap_bps"] // 10000
+            if chain["resale_floor_bps"] is not None:
+                ticket.onchain_floor_kes = -(-face * chain["resale_floor_bps"] // 10000)
+            object_session(ticket).commit()
+    tier_floor = tier.resale_floor_price_kes if tier else 0.0
+    if ticket.onchain_cap_kes is not None:
+        return {
+            "face": ticket.onchain_face_kes,
+            "floor": ticket.onchain_floor_kes if ticket.onchain_floor_kes is not None else tier_floor,
+            "ceiling": ticket.onchain_cap_kes,
+        }
+    return {
+        "face": tier.price_kes if tier else None,
+        "floor": tier_floor,
+        "ceiling": tier.resale_ceiling_price_kes if tier else 0.0,
+    }
+
+
 def _log_rejected_listing(db: Session, user_id: str, ticket: Ticket, price_kes: float, message: str) -> None:
     """Record a chain-rejected listing price so the organiser's Resale
     Compliance page counts real blocked attempts, not a guess."""
@@ -150,7 +186,8 @@ def _list_onchain(db: Session, user_id: str, ticket: Ticket, price_kes: float) -
     seller as a 400. A ticket minted on the older contract has no floor
     on-chain, so only for those is the floor checked here instead."""
     address = web3_service.ticket_contract_address(ticket)
-    floor = ticket.tier.resale_floor_price_kes if ticket.tier else 0
+    limits = _resale_limits(ticket)
+    floor = limits["floor"]
     if not web3_service.has_onchain_floor(address) and floor and price_kes < floor:
         message = f"Below the organiser's minimum resale price of KES {floor:,.0f}"
         _log_rejected_listing(db, user_id, ticket, price_kes, message)
@@ -159,7 +196,10 @@ def _list_onchain(db: Session, user_id: str, ticket: Ticket, price_kes: float) -
         return web3_service.list_for_resale_onchain(ticket.nft_token_id, int(round(price_kes)), address)
     except web3_service.ContractRevertError as e:
         _log_rejected_listing(db, user_id, ticket, price_kes, str(e))
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(
+            status_code=400,
+            detail=f"{e}. This ticket can be resold for KES {limits['floor']:,.0f} to KES {limits['ceiling']:,.0f}.",
+        )
 
 
 # ── Serialization helpers ───────────────────────────────────────────────────
@@ -180,6 +220,8 @@ def _serialize_listing(transfer: Transfer) -> dict:
     ticket = transfer.ticket
     tier = ticket.tier if ticket else None
     event = transfer.event
+    # Recorded when it was listed (create_listing); no chain reads here.
+    limits = _resale_limits(ticket, look_up=False) if ticket else {"face": None, "floor": 0.0, "ceiling": 0.0}
 
     if transfer.status in _SETTLED_STATUSES:
         # Frozen at settlement — the real, final numbers, not a live hint.
@@ -216,9 +258,9 @@ def _serialize_listing(transfer: Transfer) -> dict:
         "category": event.category if event else None,
         "image_url": event.image_url if event else None,
         "tier_name": tier.tier_name if tier else None,
-        "face_value_kes": tier.price_kes if tier else None,
-        "resale_floor_kes": tier.resale_floor_price_kes if tier else 0.0,
-        "resale_ceiling_kes": tier.resale_ceiling_price_kes if tier else 0.0,
+        "face_value_kes": limits["face"],
+        "resale_floor_kes": limits["floor"],
+        "resale_ceiling_kes": limits["ceiling"],
         "checked_in": ticket.status == TicketStatus.USED if ticket else False,
         # The listing and (once sold) the settlement, as recorded on-chain.
         "listing_tx_hash": transfer.listing_tx_hash,
@@ -245,6 +287,8 @@ def _eligible_ticket(ticket: Ticket) -> dict:
         reason = "Event has ended"
     else:
         reason = _resale_rule_reason(ticket)
+    # Only a ticket that can be listed is worth a chain read.
+    limits = _resale_limits(ticket, look_up=reason is None)
 
     return {
         "ticket_id": ticket.id,
@@ -255,8 +299,9 @@ def _eligible_ticket(ticket: Ticket) -> dict:
         "category": (event.category if event and event.category else "general"),
         "image_url": event.image_url if event else None,
         "tier_name": tier.tier_name if tier else None,
-        "floor": tier.resale_floor_price_kes if tier else 0.0,
-        "ceiling": tier.resale_ceiling_price_kes if tier else 0.0,
+        "face_value": limits["face"],
+        "floor": limits["floor"],
+        "ceiling": limits["ceiling"],
         "royalty_percent": tier.organizer_royalty_percent if tier else 0.0,
         "eligible": reason is None,
         "ineligible_reason": reason,

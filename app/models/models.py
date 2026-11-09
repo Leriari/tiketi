@@ -465,6 +465,13 @@ class Ticket(Base):
     # Which TiketiNFT contract it was minted on. Null for tickets minted
     # before this was recorded: web3_service.ticket_contract_address.
     nft_contract_address: Mapped[str | None] = mapped_column(String(42))
+    # Face value and resale limits (KES) fixed on the contract at mint. The
+    # organiser may change the tier's later; this ticket keeps these. Null
+    # until minted, or for tickets minted before they were recorded
+    # (app/api/routes/resale.py _resale_limits fills those from the chain).
+    onchain_face_kes: Mapped[int | None] = mapped_column(Integer)
+    onchain_floor_kes: Mapped[int | None] = mapped_column(Integer)
+    onchain_cap_kes: Mapped[int | None] = mapped_column(Integer)
     # The markUsed transaction once the ticket was admitted at the gate.
     used_tx_hash: Mapped[str | None] = mapped_column(String(66))
 

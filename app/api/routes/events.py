@@ -1,4 +1,7 @@
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 from typing import List
 
@@ -66,10 +69,17 @@ def list_events(
     limit: int = 20,
     db: Session = Depends(get_db),
 ):
-    """List all public (published or sold-out) events."""
+    """List public (published or sold-out) events that haven't finished:
+    until their end time, or their start time when no end is set. A past
+    event's own page still opens (get_event below), e.g. from a ticket."""
     events = (
         db.query(Event)
-        .filter(Event.status.in_(_PUBLIC_STATUSES), organiser_service.not_suspended())
+        .filter(
+            Event.status.in_(_PUBLIC_STATUSES),
+            organiser_service.not_suspended(),
+            # Naive UTC, as event dates are stored.
+            func.coalesce(Event.ends_at, Event.event_date) > datetime.utcnow(),
+        )
         .order_by(Event.event_date)
         .offset(skip)
         .limit(limit)

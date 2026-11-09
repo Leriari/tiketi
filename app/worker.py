@@ -112,6 +112,11 @@ def mint_ticket_nft(self, ticket_id: str):
         ticket.nft_token_id = token_id
         ticket.nft_tx_hash = tx_hash
         ticket.nft_contract_address = settings.NFT_CONTRACT_ADDRESS
+        # The limits as the contract computes them (cap rounded down, floor up).
+        face = int(tier.price_kes)
+        ticket.onchain_face_kes = face
+        ticket.onchain_cap_kes = face * resale_cap_bps // 10000
+        ticket.onchain_floor_kes = -(-face * resale_floor_bps // 10000)
         db.commit()
 
         logger.info(f"Minted NFT for ticket={ticket_id}: token_id={token_id} tx={tx_hash}")

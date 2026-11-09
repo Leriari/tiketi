@@ -196,7 +196,7 @@ def test_listing_one_shilling_above_cap_reverts_onchain(seller_headers, multipli
     detail = res.json()["detail"]
     # This IS the assertion that matters: the failure must be the contract's
     # own revert string, not an application-level validation message.
-    assert detail == "TiketiNFT: price exceeds resale cap", detail
+    assert detail.startswith("TiketiNFT: price exceeds resale cap."), detail
 
 
 @pytest.mark.parametrize("floor", [1.0, 0.5])
@@ -211,8 +211,52 @@ def test_floor_is_enforced_onchain(seller_headers, floor):
     floor_price = round(1000 * floor)
     res = client.post("/api/v1/resale/listings", json={"ticket_id": ticket_id, "price_kes": floor_price - 1}, headers=seller_headers)
     assert res.status_code == 400, res.text
-    assert res.json()["detail"] == "TiketiNFT: price below resale floor"
+    assert res.json()["detail"].startswith("TiketiNFT: price below resale floor.")
     _list_ticket(seller_headers, ticket_id, floor_price)
+
+
+def test_a_ticket_keeps_the_limits_it_was_minted_with(seller_headers):
+    """The organiser raises the price and the cap after a ticket is sold.
+    That ticket's limits are fixed in the contract, so the Sell page must
+    offer its own range, not the tier's new one."""
+    event = _create_event(seller_headers, ticket_price_kes=1000, max_resale_multiplier=1.1, min_resale_multiplier=0.9)
+    ticket_id = _purchase_and_mint(seller_headers, event["id"], "0711000001")
+    assert (_get_ticket(ticket_id).onchain_face_kes, _get_ticket(ticket_id).onchain_cap_kes) == (1000, 1100)
+
+    tier = event["tiers"][0]
+    res = client.patch(f"/api/v1/events/{event['id']}", json={
+        "max_resale_multiplier": 1.5,
+        "tiers": [{"id": tier["id"], "name": tier["name"], "price": 2000, "capacity": 50, "visibility": "public"}],
+    }, headers=seller_headers)
+    assert res.status_code == 200, res.text
+
+    eligible = next(t for t in client.get("/api/v1/resale/eligible-tickets", headers=seller_headers).json()
+                    if t["ticket_id"] == ticket_id)
+    assert (eligible["face_value"], eligible["floor"], eligible["ceiling"]) == (1000, 900, 1100)
+
+    res = client.post("/api/v1/resale/listings", json={"ticket_id": ticket_id, "price_kes": 1101}, headers=seller_headers)
+    assert res.status_code == 400
+    assert res.json()["detail"] == ("TiketiNFT: price exceeds resale cap. "
+                                    "This ticket can be resold for KES 900 to KES 1,100.")
+    listing = _list_ticket(seller_headers, ticket_id, 1100)
+    assert (listing["face_value_kes"], listing["resale_ceiling_kes"]) == (1000, 1100)
+
+
+def test_limits_of_an_older_ticket_are_read_from_the_chain(seller_headers):
+    """Tickets minted before the limits were recorded get them from the
+    contract the first time they're needed."""
+    event = _create_event(seller_headers, ticket_price_kes=1000, max_resale_multiplier=1.2, min_resale_multiplier=0.8)
+    ticket_id = _purchase_and_mint(seller_headers, event["id"], "0711000001")
+    db = TestingSessionLocal()
+    ticket = db.get(Ticket, ticket_id)
+    ticket.onchain_face_kes = ticket.onchain_floor_kes = ticket.onchain_cap_kes = None
+    db.commit()
+    db.close()
+
+    eligible = next(t for t in client.get("/api/v1/resale/eligible-tickets", headers=seller_headers).json()
+                    if t["ticket_id"] == ticket_id)
+    assert (eligible["face_value"], eligible["floor"], eligible["ceiling"]) == (1000, 800, 1200)
+    assert _get_ticket(ticket_id).onchain_cap_kes == 1200
 
 
 def test_buyers_and_holders_can_check_a_resale_onchain(seller_headers, buyer_headers):

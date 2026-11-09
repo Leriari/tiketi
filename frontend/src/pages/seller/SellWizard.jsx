@@ -132,15 +132,15 @@ export default function SellWizard() {
               <p className="text-body-sm text-ink-tertiary">Face value</p>
               <p className="text-body font-semibold text-ink-primary">{selected.event_title} · {selected.tier_name}</p>
             </div>
-            <MoneyText value={selected.floor} size="h3" />
+            <MoneyText value={selected.face_value ?? selected.floor} size="h3" />
           </Card>
 
           <div className="rounded-md bg-info-bg px-4 py-3 flex flex-col gap-0.5">
             <span className="text-body-sm font-semibold text-info-on-tint">
-              Maximum resale price: <MoneyText value={selected.ceiling} size="body" className="text-info-on-tint" /> ({Math.round((selected.ceiling / selected.floor) * 100)}% of face value)
+              Maximum resale price: <MoneyText value={selected.ceiling} size="body" className="text-info-on-tint" /> ({Math.round((selected.ceiling / (selected.face_value ?? selected.floor)) * 100)}% of face value)
             </span>
             <span className="flex items-center gap-1.5 text-caption text-info-on-tint/80">
-              <ShieldCheck size={12} /> This limit is enforced by smart contract
+              <ShieldCheck size={12} /> Fixed in this ticket's smart contract when it was bought
             </span>
           </div>
 
@@ -166,7 +166,7 @@ export default function SellWizard() {
                 className="flex-1 h-11 rounded-sm bg-surface-inset border border-line-strong px-3 text-h3 text-ink-primary tabular-nums focus:outline-none focus:ring-2 focus:ring-brand-primary"
               />
             </div>
-            {shake && <span className="text-caption text-danger">Above the maximum allowed for this event</span>}
+            {shake && <span className="text-caption text-danger">Above the maximum allowed for this ticket</span>}
           </div>
 
           <Card className="flex flex-col gap-1.5">
