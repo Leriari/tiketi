@@ -215,6 +215,18 @@ Every payout gets its own address with a secret token, so nothing needs
 registering. If a result never arrives, use **Check status with M-Pesa**
 on the payout; never pay it again by hand without checking first.
 
+To check the whole round trip on the sandbox, run this on the server. It
+sends one B2C and one B2B payout through the real code and waits for
+Safaricom's results; both should end `paid` with an M-Pesa receipt. Its
+test records are labelled "Sandbox payout test" and stay in the Payout
+Queue as evidence.
+
+```bash
+cd ~/tiketi/deploy
+docker compose --env-file .env.production -f docker-compose.prod.yml exec api \
+  python scripts/payout_sandbox_check.py
+```
+
 Before real money: B2C needs a bulk disbursement (B2C) shortcode, or a
 paybill converted to Safaricom's "one account", with a funded utility
 account. Check the transfer charges in `app/core/constants.py` against

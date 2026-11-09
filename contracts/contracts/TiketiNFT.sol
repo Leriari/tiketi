@@ -9,7 +9,10 @@ import "@openzeppelin/contracts/security/ReentrancyGuard.sol";
 /// @title TiketiNFT — ChainTix event ticket, ERC-721 + ERC-2981 royalties
 /// @notice Each token is one ticket. Anti-scalping is enforced on-chain:
 ///         a resale listing above its cap, or below its floor (both set
-///         from face value at mint, by the organiser), cannot be created.
+///         from face value at mint, by the organiser), cannot be created,
+///         and a ticket can't be handed over any other way: plain ERC-721
+///         transfers are blocked, so it moves only through buyResale or a
+///         one-time claimTicket.
 contract TiketiNFT is ERC721, ERC2981, Ownable, ReentrancyGuard {
     struct TicketMeta {
         uint256 eventId;
@@ -39,6 +42,10 @@ contract TiketiNFT is ERC721, ERC2981, Ownable, ReentrancyGuard {
     /// settlement in buyResale is in the chain's native currency (msg.value),
     /// since KES itself is not an on-chain asset.
     mapping(uint256 => uint256) public listingPriceKes;
+
+    /// @dev Set only while buyResale or claimTicket moves a token: the two
+    /// moves this contract allows (see _beforeTokenTransfer).
+    bool private _allowedMove;
 
     event TicketMinted(
         uint256 indexed tokenId,
@@ -148,7 +155,7 @@ contract TiketiNFT is ERC721, ERC2981, Ownable, ReentrancyGuard {
         // Effects before interactions: clear the listing and move ownership
         // first, so a reentrant call sees this token as already sold.
         listingPriceKes[tokenId] = 0;
-        _transfer(seller, msg.sender, tokenId);
+        _move(seller, msg.sender, tokenId);
 
         (bool sellerPaid, ) = payable(seller).call{value: sellerProceeds}("");
         require(sellerPaid, "TiketiNFT: seller payment failed");
@@ -193,8 +200,9 @@ contract TiketiNFT is ERC721, ERC2981, Ownable, ReentrancyGuard {
     }
 
     /// @notice Move a custodially-held ticket to the holder's own wallet.
-    /// One-time per token — once claimed, the new owner uses standard
-    /// ERC-721 transfers for anything further.
+    /// One-time per token. After that the owner can only resell it through
+    /// listForResale/buyResale, within its cap and floor. A listing doesn't
+    /// survive the move.
     function claimTicket(uint256 tokenId, address to) external {
         require(_exists(tokenId), "TiketiNFT: token does not exist");
         require(ownerOf(tokenId) == msg.sender, "TiketiNFT: caller is not token owner");
@@ -202,7 +210,8 @@ contract TiketiNFT is ERC721, ERC2981, Ownable, ReentrancyGuard {
         require(!ticketMeta[tokenId].claimed, "TiketiNFT: already claimed");
 
         ticketMeta[tokenId].claimed = true;
-        _transfer(msg.sender, to, tokenId);
+        listingPriceKes[tokenId] = 0;
+        _move(msg.sender, to, tokenId);
 
         emit TicketClaimed(tokenId, msg.sender, to);
     }
@@ -211,6 +220,23 @@ contract TiketiNFT is ERC721, ERC2981, Ownable, ReentrancyGuard {
     function setMinter(address newMinter) external onlyOwner {
         require(newMinter != address(0), "TiketiNFT: minter cannot be zero address");
         minter = newMinter;
+    }
+
+    function _move(address from, address to, uint256 tokenId) private {
+        _allowedMove = true;
+        _transfer(from, to, tokenId);
+        _allowedMove = false;
+    }
+
+    /// @dev Minting is allowed; any other move must come from _move. This
+    /// blocks transferFrom and safeTransferFrom, which would otherwise let a
+    /// holder sell a ticket at any price outside the contract.
+    function _beforeTokenTransfer(address from, address to, uint256 firstTokenId, uint256 batchSize)
+        internal
+        override
+    {
+        require(from == address(0) || _allowedMove, "TiketiNFT: tickets move only by resale or claim");
+        super._beforeTokenTransfer(from, to, firstTokenId, batchSize);
     }
 
     function supportsInterface(bytes4 interfaceId)

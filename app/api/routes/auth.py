@@ -265,7 +265,12 @@ def login(body: PhoneOTPRequest, request: Request, db: Session = Depends(get_db)
     enforce_rate_limit(f"login:phone:{body.phone_number}", *_LOGIN_PHONE_LIMIT)
     enforce_rate_limit(f"login:ip:{client_ip(request)}", *_LOGIN_IP_LIMIT)
 
-    user = auth_service.get_or_create_user(db, body.phone_number)
+    user = db.query(User).filter(User.phone_number == body.phone_number).first()
+    if not user:
+        # No code was checked, so the number isn't verified.
+        user = User(phone_number=body.phone_number, phone_verified=False)
+        db.add(user)
+        db.commit()
     token = auth_service.issue_session(db, user, "dev login", request)
 
     return TokenResponse(

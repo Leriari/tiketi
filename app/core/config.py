@@ -180,9 +180,9 @@ class Settings(BaseSettings):
     # additive, not load-bearing for the rest of the platform.
     BLOCKCHAIN_RPC_URL: str = ""
     NFT_CONTRACT_ADDRESS: str = ""
-    # The previous TiketiNFT (cap only, no resale floor), when tickets were
-    # minted on it before NFT_CONTRACT_ADDRESS was deployed. They stay on it
-    # (app/services/web3_service.py). Empty when there's only one contract.
+    # The first TiketiNFT (cap only, no resale floor), when tickets were
+    # minted on it. They stay on it, as tickets on any later contract stay
+    # on theirs (app/services/web3_service.py). Empty if it was never used.
     NFT_LEGACY_CONTRACT_ADDRESS: str = ""
     MINTER_PRIVATE_KEY: str = ""
     # Block explorer for the chain above — links in ticket pages and emails.

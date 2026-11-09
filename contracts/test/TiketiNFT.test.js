@@ -424,4 +424,58 @@ describe("TiketiNFT", function () {
       ).to.be.revertedWith("TiketiNFT: caller is not token owner");
     });
   });
+
+  // ── No way round the cap ─────────────────────────────────────────────────
+  // A plain transfer would let a holder sell at any price outside the
+  // contract, so tickets move only through buyResale or claimTicket.
+  describe("transfers outside resale and claim", function () {
+    it("blocks transferFrom and both safeTransferFrom forms, for the custodian too", async function () {
+      const { nft, minterWallet, other, thirdParty } = await loadFixture(deployFixture);
+      const tokenId = await mintOne(nft, minterWallet, minterWallet);
+      const reason = "TiketiNFT: tickets move only by resale or claim";
+
+      await expect(nft.connect(minterWallet).transferFrom(minterWallet.address, other.address, tokenId)).to.be.revertedWith(reason);
+      await expect(
+        nft.connect(minterWallet)["safeTransferFrom(address,address,uint256)"](minterWallet.address, other.address, tokenId)
+      ).to.be.revertedWith(reason);
+      await expect(
+        nft.connect(minterWallet)["safeTransferFrom(address,address,uint256,bytes)"](minterWallet.address, other.address, tokenId, "0x")
+      ).to.be.revertedWith(reason);
+
+      // Approval doesn't open a way either.
+      await nft.connect(minterWallet).approve(thirdParty.address, tokenId);
+      await expect(nft.connect(thirdParty).transferFrom(minterWallet.address, other.address, tokenId)).to.be.revertedWith(reason);
+      expect(await nft.ownerOf(tokenId)).to.equal(minterWallet.address);
+    });
+
+    it("blocks a claimed ticket's owner from passing it on directly", async function () {
+      const { nft, minterWallet, buyer, other: externalWallet, thirdParty } = await loadFixture(deployFixture);
+      const tokenId = await mintOne(nft, minterWallet, buyer);
+      await nft.connect(buyer).claimTicket(tokenId, externalWallet.address);
+
+      await expect(
+        nft.connect(externalWallet).transferFrom(externalWallet.address, thirdParty.address, tokenId)
+      ).to.be.revertedWith("TiketiNFT: tickets move only by resale or claim");
+    });
+
+    it("still lets a claimed ticket be resold within its cap", async function () {
+      const { nft, minterWallet, buyer, other: externalWallet, thirdParty } = await loadFixture(deployFixture);
+      const tokenId = await mintOne(nft, minterWallet, buyer);
+      await nft.connect(buyer).claimTicket(tokenId, externalWallet.address);
+      await nft.connect(externalWallet).listForResale(tokenId, 1100);
+
+      await nft.connect(thirdParty).buyResale(tokenId, { value: ethers.parseEther("0.01") });
+      expect(await nft.ownerOf(tokenId)).to.equal(thirdParty.address);
+    });
+
+    it("drops a listing when the ticket is claimed out", async function () {
+      const { nft, minterWallet, buyer, other: externalWallet, thirdParty } = await loadFixture(deployFixture);
+      const tokenId = await mintOne(nft, minterWallet, buyer);
+      await nft.connect(buyer).listForResale(tokenId, 1000);
+      await nft.connect(buyer).claimTicket(tokenId, externalWallet.address);
+
+      expect(await nft.listingPriceKes(tokenId)).to.equal(0n);
+      await expect(nft.connect(thirdParty).buyResale(tokenId, { value: 1n })).to.be.revertedWith("TiketiNFT: not listed for resale");
+    });
+  });
 });

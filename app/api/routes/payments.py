@@ -10,10 +10,11 @@ Payment flow:
 """
 import hmac
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from fastapi.concurrency import run_in_threadpool
+from sqlalchemy import and_, func, or_
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db
@@ -44,6 +45,36 @@ settings = get_settings()
 # user through ~15-20 purchases across its run) but still a real ceiling
 # against a script hammering the endpoint.
 _PURCHASE_LIMIT = (30, 300)
+
+
+# Seats in a purchase still waiting for its payment are held, so two buyers
+# can't both pay for the last ticket. A hold lapses once the payment could
+# no longer be completed: an STK prompt expires on the phone within a couple
+# of minutes, a Paystack checkout page stays open longer. A payment
+# confirmed after its hold lapsed still gets its tickets: the buyer has paid.
+_SEAT_HOLD = timedelta(minutes=5)
+_CARD_SEAT_HOLD = timedelta(minutes=30)
+
+
+def _seats_held(db: Session, event_id: str, tier_id: str | None = None) -> int:
+    """Tickets in this event (or tier) whose purchase is still being paid for."""
+    now = datetime.utcnow()
+    query = (
+        db.query(func.count(Ticket.id))
+        .join(Payment, or_(Payment.ticket_id == Ticket.id, Payment.id == Ticket.group_payment_id))
+        .filter(
+            Ticket.event_id == event_id,
+            Ticket.status == TicketStatus.PENDING_PAYMENT,
+            Payment.status == PaymentStatus.INITIATED,
+            or_(
+                and_(Payment.method == "card", Payment.initiated_at > now - _CARD_SEAT_HOLD),
+                and_(func.coalesce(Payment.method, "mpesa") != "card", Payment.initiated_at > now - _SEAT_HOLD),
+            ),
+        )
+    )
+    if tier_id:
+        query = query.filter(Ticket.tier_id == tier_id)
+    return query.scalar() or 0
 
 
 def _activate_ticket_for_payment(db: Session, payment: Payment, receipt_number: str) -> list[Ticket]:
@@ -219,9 +250,15 @@ async def purchase_ticket(
     )
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
+    # Purchases for one event take turns from here to the commit (Postgres;
+    # SQLite has no row locks but runs one write at a time), so the seat
+    # count below can't change under this purchase.
+    db.query(Event).filter(Event.id == event.id).with_for_update().first()
 
     if event.tickets_remaining < body.quantity:
         raise HTTPException(status_code=400, detail="Not enough tickets remaining for this event")
+    if event.tickets_remaining - _seats_held(db, event.id) < body.quantity:
+        raise HTTPException(status_code=409, detail="The last tickets are being bought right now. Try again in a few minutes.")
 
     # ── 1b. Resolve the ticket tier ──────────────────────────────────────────
     if body.tier_id:
@@ -248,6 +285,8 @@ async def purchase_ticket(
 
     if tier.tickets_remaining < body.quantity:
         raise HTTPException(status_code=400, detail="Not enough tickets remaining in this tier")
+    if tier.tickets_remaining - _seats_held(db, event.id, tier.id) < body.quantity:
+        raise HTTPException(status_code=409, detail="The last tickets in this tier are being bought right now. Try again in a few minutes.")
 
     total_amount = tier.price_kes * body.quantity
     if body.method == "card":

@@ -21,12 +21,17 @@ user, which this codebase has no infrastructure for and which raises
 security questions well beyond this integration's scope.
 
 Contract versions: new tickets are minted on NFT_CONTRACT_ADDRESS (the
-current TiketiNFT, with an on-chain resale floor as well as a cap).
-Tickets minted before it was deployed stay on the contract they were
-minted on: Ticket.nft_contract_address, or NFT_LEGACY_CONTRACT_ADDRESS when
-that's empty (tickets from before the column existed). Every call below
-takes the ticket's own contract address, and that older contract is read
-with its own ABI (abi/TiketiNFT.v1.json: no floor).
+current TiketiNFT). Tickets minted before it was deployed stay on the
+contract they were minted on: Ticket.nft_contract_address, or
+NFT_LEGACY_CONTRACT_ADDRESS (the first contract) when that's empty, for
+tickets from before the column existed. Every call below takes the
+ticket's own contract address.
+- v1, NFT_LEGACY_CONTRACT_ADDRESS: resale cap only. Read with its own ABI
+  (abi/TiketiNFT.v1.json).
+- v2: adds the resale floor.
+- v3: also blocks plain ERC-721 transfers, so a ticket moves only through
+  buyResale or claimTicket and the cap can't be dodged.
+v2 and v3 share an ABI (abi/TiketiNFT.json).
 """
 import json
 import logging
@@ -58,8 +63,9 @@ def _get_web3() -> Web3:
     return Web3(Web3.HTTPProvider(settings.BLOCKCHAIN_RPC_URL))
 
 
-def _is_current(address: str | None) -> bool:
-    return not address or address.lower() == settings.NFT_CONTRACT_ADDRESS.lower()
+def _is_v1(address: str | None) -> bool:
+    legacy = settings.NFT_LEGACY_CONTRACT_ADDRESS
+    return bool(address and legacy) and address.lower() == legacy.lower()
 
 
 def ticket_contract_address(ticket) -> str:
@@ -69,7 +75,7 @@ def ticket_contract_address(ticket) -> str:
 
 def has_onchain_floor(address: str | None) -> bool:
     """Whether the contract at this address enforces a resale floor."""
-    return _is_current(address)
+    return not _is_v1(address)
 
 
 @lru_cache
@@ -77,10 +83,9 @@ def _get_contract(address: str | None = None):
     """The contract at `address` (default: the current one), with the ABI
     of its version."""
     w3 = _get_web3()
-    current = _is_current(address)
     return w3.eth.contract(
-        address=Web3.to_checksum_address(settings.NFT_CONTRACT_ADDRESS if current else address),
-        abi=_load_abi("TiketiNFT.json" if current else "TiketiNFT.v1.json"),
+        address=Web3.to_checksum_address(address or settings.NFT_CONTRACT_ADDRESS),
+        abi=_load_abi("TiketiNFT.v1.json" if _is_v1(address) else "TiketiNFT.json"),
     )
 
 

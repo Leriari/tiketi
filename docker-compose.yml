@@ -44,7 +44,8 @@ services:
   # Background task worker (for future async jobs like NFT minting)
   worker:
     build: .
-    command: celery -A app.worker worker --loglevel=info
+    # Both queues: mint_ticket_nft is routed to "blockchain" (app/worker.py).
+    command: celery -A app.worker worker --loglevel=info -Q celery,blockchain
     environment:
       - DATABASE_URL=postgresql://tiketi:tiketi@db:5432/tiketi_db
       - REDIS_URL=redis://redis:6379/0
