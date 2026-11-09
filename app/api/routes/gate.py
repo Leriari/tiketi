@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 from app.db.session import get_db
 from app.models.models import (
     Ticket, TicketStatus, Event, GateScanner, GateScannerStatus, AuditLog, User, OrganizerRole,
-    Attendance, AttendanceStatus,
+    Attendance, AttendanceStatus, Transfer, TransferStatus,
 )
 from app.core.dependencies import get_current_user
 from app.core.authz import check_org_role, get_current_scanner, hash_token, generate_token
@@ -252,6 +252,22 @@ def sync_event_tickets(
 
 # ─── Scan reconciliation (Work Order 05 B5) ─────────────────────────────────
 
+def _mark_admitted(db: Session, ticket_id: str, scanner: GateScanner, scanned_at: datetime) -> None:
+    """The holder is in: the ticket is used, as when admitted from the
+    Organiser Console. If it was put up for resale after this device synced,
+    that listing comes down. A sale a buyer is already paying for is left
+    alone: that one needs the organiser."""
+    ticket = db.get(Ticket, ticket_id)
+    ticket.status = TicketStatus.USED
+    ticket.used_at = scanned_at
+    ticket.gate_scanner_id = scanner.id
+    for listing in db.query(Transfer).filter(
+        Transfer.ticket_id == ticket_id, Transfer.status.in_((TransferStatus.LISTED, TransferStatus.PAUSED))
+    ):
+        listing.status = TransferStatus.CANCELLED
+        listing.cancelled_at = datetime.now(timezone.utc)
+
+
 @router.post("/scan-upload", response_model=list[ScanUploadResultItem])
 def upload_scan_batch(
     body: ScanUploadRequest,
@@ -338,6 +354,7 @@ def upload_scan_batch(
                 scan_time=item.scanned_at,
                 status=AttendanceStatus.ADMITTED,
             ))
+            _mark_admitted(db, item.ticket_id, scanner, item.scanned_at)
             admitted.append(item.ticket_id)
             results.append(ScanUploadResultItem(ticket_id=item.ticket_id, status="recorded"))
 

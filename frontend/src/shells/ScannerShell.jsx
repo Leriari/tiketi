@@ -18,6 +18,12 @@ export default function ScannerShell() {
         // validation path makes no network calls either way and does not
         // depend on this registration succeeding.
       });
+      // Hand the worker every file this page has loaded so far, so the
+      // scanner still opens after a reload with no signal (public/sw.js).
+      navigator.serviceWorker.ready.then((registration) => {
+        const urls = [location.href, ...performance.getEntriesByType("resource").map((e) => e.name)];
+        registration.active?.postMessage({ type: "cache-urls", urls });
+      });
     }
   }, []);
 

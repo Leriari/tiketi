@@ -169,6 +169,36 @@ def test_upload_records_admitted_and_denied_scans_with_reasons():
     db.close()
 
 
+def test_an_uploaded_admission_marks_the_ticket_used():
+    """Same as an admission at the Organiser Console: the ticket is used,
+    and a resale listing made after the device synced comes down."""
+    from app.models.models import Ticket, TicketStatus, Transfer, TransferStatus, TransferType
+    headers = _login("0799222010")
+    event = _create_org_and_event(headers, capacity=10)
+    ticket_id = _buy_ticket(headers, event["id"], "0799222010")
+    token = _register_and_enroll(headers, event["id"], "device-used-1", "Main Gate")
+
+    db = TestingSessionLocal()
+    ticket = db.get(Ticket, ticket_id)
+    ticket.status = TicketStatus.RESALE  # listed after the device synced
+    db.add(Transfer(ticket_id=ticket_id, event_id=event["id"], seller_id=ticket.owner_id, transfer_type=TransferType.RESALE,
+                    status=TransferStatus.LISTED, asking_price_kes=500))
+    db.commit()
+    db.close()
+
+    batch = {"scans": [{"ticket_id": ticket_id, "granted": True, "reason_code": "GRANTED", "scanned_at": "2027-05-01T19:00:00"}]}
+    res = client.post("/api/v1/gate/scan-upload", json=batch, headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 200 and res.json()[0]["status"] == "recorded", res.text
+
+    db = TestingSessionLocal()
+    ticket = db.get(Ticket, ticket_id)
+    assert ticket.status == TicketStatus.USED
+    assert ticket.used_at.isoformat().startswith("2027-05-01T19:00")
+    assert ticket.gate_scanner_id
+    assert db.query(Transfer).filter(Transfer.ticket_id == ticket_id).one().status == TransferStatus.CANCELLED
+    db.close()
+
+
 def test_upload_is_idempotent_on_retry_from_the_same_scanner():
     headers = _login("0799222005")
     event = _create_org_and_event(headers, capacity=10)

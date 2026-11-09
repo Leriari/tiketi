@@ -101,18 +101,20 @@ export default function Scan() {
       setUploadBanner({ phase: "done", count: admissions.length });
       setTimeout(() => setUploadBanner(null), 2000);
     } catch (err) {
-      // reportScanBatch has no real backend yet (Block B) — this is
-      // expected to fail today. Say so plainly rather than hanging on a
-      // spinner or silently discarding the attempt; nothing is lost, the
-      // admissions stay queued (uploaded: false) for when it's wired.
+      // Nothing is lost: the admissions stay queued (uploaded: false) and
+      // go up with the next attempt.
       setUploadBanner(null);
-      if (!(err instanceof ApiError && err.status === 501)) {
-        console.error("Scan batch upload failed:", err);
-      }
+      console.error("Scan batch upload failed:", err instanceof ApiError ? err.message : err);
     } finally {
       uploadingRef.current = false;
     }
   }, [meta]);
+
+  // Admissions go up by themselves whenever there's a connection: when
+  // it comes back, and when the scanner opens online with some queued.
+  useEffect(() => {
+    if (online) uploadPending();
+  }, [online, uploadPending]);
 
   useEffect(() => {
     function goOnline() { setOnline(true); }
