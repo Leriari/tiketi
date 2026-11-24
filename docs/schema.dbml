@@ -89,6 +89,7 @@ Enum transferstatus {
 Enum wallettransactiontype {
   SALE
   WITHDRAWAL
+  PURCHASE
 }
 
 Enum wallettransactionstatus {
