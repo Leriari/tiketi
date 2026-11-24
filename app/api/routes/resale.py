@@ -20,6 +20,8 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.concurrency import run_in_threadpool
+from sqlalchemy import and_, or_
 from sqlalchemy.orm import Session, object_session
 
 from app.db.session import get_db
@@ -38,7 +40,12 @@ from app.services import payouts as payout_service
 from app.services import web3_service
 from app.core.dependencies import get_current_user
 from app.services import organiser_service
-from app.services.platform_settings import current_fees, flag_on
+from app.services import paystack_service
+from app.services.paystack_service import PaystackError
+from app.services.platform_settings import current_fees, flag_on, resale_fee_split
+from app.api.routes.payments import (
+    _CARD_SEAT_HOLD, _after_success, _handle_payment_success, refresh_card_payment,
+)
 
 router = APIRouter(prefix="/resale", tags=["Resale"])
 logger = logging.getLogger(__name__)
@@ -59,30 +66,39 @@ _SETTLED_STATUSES = (TransferStatus.PAID, TransferStatus.COMPLETED, TransferStat
 
 # ── Buying: what's for sale, and purchases that never completed ──────────────
 
-# A buyer who never finishes the M-Pesa prompt would otherwise hold the
-# listing in PENDING_PAYMENT forever. STK prompts expire on the phone within
-# a couple of minutes; this leaves room for a slow callback.
+# A buyer who never finishes paying would otherwise hold the listing in
+# PENDING_PAYMENT forever. STK prompts expire on the phone within a couple
+# of minutes; this leaves room for a slow callback. A Paystack card page
+# stays open longer, so a card buyer gets the same 30 minutes a primary
+# card purchase holds its seats for (payments._CARD_SEAT_HOLD).
 RESALE_PAYMENT_TIMEOUT = timedelta(minutes=5)
+RESALE_CARD_PAYMENT_TIMEOUT = _CARD_SEAT_HOLD
 _PUBLIC_EVENT_STATUSES = (EventStatus.PUBLISHED, EventStatus.SOLD_OUT)
 
 
 def _release_stale_purchases(db: Session) -> None:
     """Put listings whose buyer never paid back on sale. Runs lazily
     whenever listings are read or bought, so no scheduler is needed."""
-    cutoff = datetime.utcnow() - RESALE_PAYMENT_TIMEOUT
+    now = datetime.utcnow()
     stale = (
         db.query(Transfer)
         .join(Payment, Transfer.payment_id == Payment.id)
         .filter(
             Transfer.status == TransferStatus.PENDING_PAYMENT,
             Payment.status == PaymentStatus.INITIATED,
-            Payment.initiated_at < cutoff,
+            or_(
+                and_(Payment.method != "card", Payment.initiated_at < now - RESALE_PAYMENT_TIMEOUT),
+                and_(Payment.method == "card", Payment.initiated_at < now - RESALE_CARD_PAYMENT_TIMEOUT),
+            ),
         )
         .all()
     )
     for transfer in stale:
         transfer.payment.status = PaymentStatus.TIMEOUT
-        transfer.payment.failure_reason = "The M-Pesa payment wasn't completed in time."
+        transfer.payment.failure_reason = (
+            "The card payment wasn't completed in time." if transfer.payment.method == "card"
+            else "The M-Pesa payment wasn't completed in time."
+        )
         transfer.status = TransferStatus.LISTED
         transfer.buyer_id = None
         transfer.payment_id = None
@@ -204,16 +220,7 @@ def _list_onchain(db: Session, user_id: str, ticket: Ticket, price_kes: float) -
 
 # ── Serialization helpers ───────────────────────────────────────────────────
 
-def _fee_split(price_kes: float, royalty_percent: float, platform_fee_percent: float) -> tuple[float, float, float]:
-    """
-    royalty_kes, platform_fee_kes, payout_kes. payout_kes is defined as the
-    remainder (price minus the other two, each independently rounded) so the
-    three always sum to price_kes exactly — no wei/cent lost to rounding.
-    """
-    royalty_kes = round(price_kes * royalty_percent / 100)
-    platform_fee_kes = round(price_kes * platform_fee_percent / 100)
-    payout_kes = price_kes - royalty_kes - platform_fee_kes
-    return royalty_kes, platform_fee_kes, payout_kes
+_fee_split = resale_fee_split  # see platform_settings.resale_fee_split
 
 
 def _serialize_listing(transfer: Transfer) -> dict:
@@ -289,6 +296,7 @@ def _eligible_ticket(ticket: Ticket) -> dict:
         reason = _resale_rule_reason(ticket)
     # Only a ticket that can be listed is worth a chain read.
     limits = _resale_limits(ticket, look_up=reason is None)
+    fees = current_fees(object_session(ticket))
 
     return {
         "ticket_id": ticket.id,
@@ -303,6 +311,9 @@ def _eligible_ticket(ticket: Ticket) -> dict:
         "floor": limits["floor"],
         "ceiling": limits["ceiling"],
         "royalty_percent": tier.organizer_royalty_percent if tier else 0.0,
+        # The admin-set rates, so the seller's preview matches what they'll get.
+        "platform_fee_percent": fees.platform_fee_percent,
+        "escrow_days": fees.seller_escrow_days,
         "eligible": reason is None,
         "ineligible_reason": reason,
     }
@@ -329,7 +340,8 @@ def _compute_wallet(db: Session, user_id: str) -> dict:
     available = 0.0
     pending = 0.0
     for t in _wallet_transactions(db, user_id):
-        if t.type == WalletTransactionType.WITHDRAWAL:
+        if t.type in (WalletTransactionType.WITHDRAWAL, WalletTransactionType.PURCHASE):
+            # Money spent: a withdrawal, or a resale ticket paid from the balance.
             if t.status != WalletTransactionStatus.FAILED:  # a failed withdrawal's money is back
                 available += t.amount_kes  # stored negative already
         elif t.available_at and t.available_at <= now:
@@ -538,6 +550,8 @@ def get_resale_purchase(payment_id: str, db: Session = Depends(get_db), current_
     payment = db.query(Payment).filter(Payment.id == payment_id, Payment.user_id == current_user.id).first()
     if not payment:
         raise HTTPException(status_code=404, detail="Purchase not found")
+    # Back from Paystack's page: find out whether the card was charged.
+    refresh_card_payment(db, payment)
     transfer = db.query(Transfer).filter(Transfer.payment_id == payment.id).first()
 
     if payment.status in (PaymentStatus.FAILED, PaymentStatus.TIMEOUT) or (payment.status == PaymentStatus.INITIATED and not transfer):
@@ -674,15 +688,26 @@ async def buy_listing(
     current_user: User = Depends(get_current_user),
 ):
     """
-    Initiates an M-Pesa STK push for a listed resale ticket. Follows the
-    same ordering as the primary purchase flow: create the pending records,
-    send the STK push, return immediately — the callback (app/api/routes/
-    payments.py's mpesa_callback / dev-confirm) does the rest.
+    Buys a listed resale ticket, three ways (body.method):
+
+    - mpesa: an STK push. Same ordering as the primary purchase: create the
+      pending records, send the push, return; the callback (payments.py's
+      mpesa_callback / dev-confirm) does the rest.
+    - card: a Paystack Checkout page. The buyer comes back to the resale
+      checkout, whose poll (get_resale_purchase) or Paystack's webhook
+      confirms it, through the same success path as M-Pesa.
+    - wallet: paid from the buyer's available ChainTix balance, at once.
+      No outside provider, so the purchase is confirmed in this request.
+
+    Every way ends in _handle_payment_success, which marks the transfer
+    PAID and queues the on-chain settlement.
     """
     if not flag_on(db, "resale_marketplace"):
         raise HTTPException(status_code=403, detail="Resale purchases are paused right now.")
     _release_stale_purchases(db)
-    transfer = db.query(Transfer).filter(Transfer.id == listing_id).first()
+    # Buyers of one listing take turns from here to the commit (Postgres;
+    # SQLite runs one writer at a time), so two can't both take it.
+    transfer = db.query(Transfer).filter(Transfer.id == listing_id).with_for_update().first()
     if not transfer:
         raise HTTPException(status_code=404, detail="Listing not found")
     # The same buyer retrying (their M-Pesa prompt timed out, they tapped
@@ -711,12 +736,32 @@ async def buy_listing(
     if reason:
         raise HTTPException(status_code=400, detail=reason)
 
+    price = transfer.asking_price_kes
+    if body.method == "card":
+        if not get_settings().PAYSTACK_CONFIGURED:
+            raise HTTPException(status_code=400, detail="Card payments aren't available yet. Pay with M-Pesa instead.")
+        if not current_user.email:
+            # Paystack sends its own card receipt, so it requires one.
+            raise HTTPException(status_code=400, detail="Add an email address to your profile to pay by card.")
+    if body.method == "wallet":
+        # Lock the buyer's row, as a withdrawal does, so two spends at once
+        # can't both pass the balance check.
+        db.query(User).filter(User.id == current_user.id).with_for_update().one()
+        available = _compute_wallet(db, current_user.id)["available"]
+        if price > available + 1e-9:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Your available wallet balance is KES {available:,.0f}. Pay with M-Pesa or card instead.",
+            )
+
     payment = Payment(
         ticket_id=transfer.ticket_id,
         tier_id=transfer.ticket.tier_id if transfer.ticket else None,
         user_id=current_user.id,
-        amount_kes=transfer.asking_price_kes,
-        phone_number=body.phone_number,
+        amount_kes=price,
+        # The number charged for M-Pesa; otherwise the buyer's own, as for a card purchase.
+        phone_number=body.phone_number or current_user.phone_number,
+        method=body.method,
         status=PaymentStatus.INITIATED,
     )
     db.add(payment)
@@ -727,6 +772,55 @@ async def buy_listing(
     transfer.status = TransferStatus.PENDING_PAYMENT
 
     event_title = transfer.event.title[:13] if transfer.event else "Ticket"
+
+    if body.method == "wallet":
+        db.add(WalletTransaction(
+            user_id=current_user.id,
+            transfer_id=transfer.id,
+            type=WalletTransactionType.PURCHASE,
+            description=f"Bought resale ticket · {transfer.event.title if transfer.event else 'ticket'}",
+            amount_kes=-price,
+            status=WalletTransactionStatus.SUCCESS,
+        ))
+        # The success path finds this transfer by its payment_id; the
+        # session doesn't autoflush, so write the link first. Without it, the
+        # payment looks like a primary purchase and re-counts the ticket as sold.
+        db.flush()
+        tickets, paid_transfer = _handle_payment_success(db, payment, receipt_number=None)
+        db.commit()
+        db.refresh(payment)
+        _after_success(payment, tickets, paid_transfer)
+        return {
+            "payment_id": payment.id,
+            "method": "wallet",
+            "message": "Paid from your wallet. Moving the ticket into your name.",
+        }
+
+    if body.method == "card":
+        # Paystack sends the buyer back to this listing's checkout either
+        # way; it then polls the purchase (paid) or cancels it (Cancel).
+        back = f"{get_settings().SITE_URL.rstrip('/')}/resale/{transfer.id}?payment={payment.id}"
+        try:
+            txn = await run_in_threadpool(
+                paystack_service.initialize_transaction,
+                reference=payment.id,
+                amount_kes=price,
+                email=current_user.email,
+                description=f"Resale ticket · {transfer.event.title if transfer.event else 'ticket'}",
+                callback_url=f"{back}&card=done",
+                cancel_url=f"{back}&card=cancelled",
+            )
+        except PaystackError as e:
+            db.rollback()
+            raise HTTPException(status_code=502, detail=f"Card payment couldn't start: {e}")
+        payment.provider_reference = txn.get("reference") or payment.id
+        db.commit()
+        return {
+            "payment_id": payment.id,
+            "method": "card",
+            "checkout_url": txn["authorization_url"],
+            "message": "Continue to the secure card payment page.",
+        }
     try:
         daraja_response = await mpesa_service.stk_push(
             phone_number=body.phone_number,
@@ -747,6 +841,7 @@ async def buy_listing(
 
     return {
         "payment_id": payment.id,
+        "method": "mpesa",
         "checkout_request_id": payment.checkout_request_id,
         "message": "STK push sent. Confirm payment on your phone.",
     }

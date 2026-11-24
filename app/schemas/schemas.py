@@ -400,12 +400,28 @@ class ResaleRepriceRequest(BaseModel):
 
 
 class ResaleBuyRequest(BaseModel):
-    phone_number: str
+    # "mpesa" (an STK push to phone_number), "card" (Paystack Checkout) or
+    # "wallet" (the buyer's own available ChainTix balance).
+    method: str = "mpesa"
+    phone_number: Optional[str] = None  # only for M-Pesa
 
     @field_validator("phone_number")
     @classmethod
     def validate_phone(cls, v):
-        return normalize_kenyan_phone(v)
+        return normalize_kenyan_phone(v) if v else None
+
+    @field_validator("method")
+    @classmethod
+    def known_method(cls, v):
+        if v not in ("mpesa", "card", "wallet"):
+            raise ValueError("method must be 'mpesa', 'card' or 'wallet'")
+        return v
+
+    @model_validator(mode="after")
+    def mpesa_needs_a_phone(self):
+        if self.method == "mpesa" and not self.phone_number:
+            raise ValueError("Enter the M-Pesa number to charge.")
+        return self
 
 
 class ResaleWithdrawRequest(BaseModel):

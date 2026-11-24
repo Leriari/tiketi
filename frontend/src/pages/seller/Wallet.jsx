@@ -11,7 +11,7 @@ import { formatPhone } from "../../format";
 
 const STATUS_TONE = { success: "success", pending: "warning", failed: "danger" };
 const STATUS_LABEL = { success: "Done", pending: "In progress", failed: "Failed" };
-const TYPE_LABEL = { sale: "Sale", withdrawal: "Withdrawal" };
+const TYPE_LABEL = { sale: "Sale", withdrawal: "Withdrawal", purchase: "Ticket bought" };
 
 function WithdrawModal({ wallet, onClose, onDone }) {
   const [amount, setAmount] = useState(String(Math.floor(wallet.available)));
@@ -181,6 +181,7 @@ export default function Wallet() {
             <option value="all">All types</option>
             <option value="sale">Sale</option>
             <option value="withdrawal">Withdrawal</option>
+            <option value="purchase">Ticket bought</option>
           </Select>
           <Select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value)} className="w-40" aria-label="Status">
             <option value="all">All statuses</option>

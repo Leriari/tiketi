@@ -255,8 +255,9 @@ export const liveApi = {
   getResaleListing: (listingId) => request(`/resale/listings/${listingId}`, { auth: false }),
   // Reads the listing back from the ticket's contract: price, floor and cap.
   verifyResaleListingOnchain: (listingId) => request(`/resale/listings/${listingId}/onchain`, { auth: false }),
-  buyResaleListing: (listingId, { phoneNumber }) =>
-    request(`/resale/listings/${listingId}/buy`, { method: "POST", body: { phone_number: phoneNumber } }),
+  // method: "mpesa" (needs phoneNumber) | "card" (returns checkout_url) | "wallet" (paid at once).
+  buyResaleListing: (listingId, { method = "mpesa", phoneNumber } = {}) =>
+    request(`/resale/listings/${listingId}/buy`, { method: "POST", body: { method, phone_number: phoneNumber || null } }),
   // awaiting_payment -> transferring -> complete (or failed / delayed)
   getResalePurchase: (paymentId) => request(`/resale/purchases/${paymentId}`),
 

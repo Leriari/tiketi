@@ -540,15 +540,22 @@ def get_payment_status(
     """Poll payment status — used by the frontend while waiting for M-Pesa
     confirmation, or after the buyer comes back from Paystack's card page."""
     payment = _own_payment(db, payment_id, current_user)
-    if payment.method == "card" and payment.status == PaymentStatus.INITIATED and payment.provider_reference:
-        # Ask Paystack rather than wait for the webhook, which may never come
-        # (a laptop isn't reachable from Paystack) or come a little later.
-        try:
-            _settle_card_transaction(db, payment, paystack_service.verify_transaction(payment.provider_reference))
-        except PaystackError as e:
-            logger.warning(f"Couldn't check card payment {payment.id} with Paystack: {e}")
-        db.refresh(payment)
+    refresh_card_payment(db, payment)
     return payment
+
+
+def refresh_card_payment(db: Session, payment: Payment) -> None:
+    """For a card payment still waiting: ask Paystack how it went and apply
+    that, rather than wait for the webhook, which may never come (a laptop
+    isn't reachable from Paystack) or come a little later. Used by both
+    status polls: this module's and the resale purchase's."""
+    if payment.method != "card" or payment.status != PaymentStatus.INITIATED or not payment.provider_reference:
+        return
+    try:
+        _settle_card_transaction(db, payment, paystack_service.verify_transaction(payment.provider_reference))
+    except PaystackError as e:
+        logger.warning(f"Couldn't check card payment {payment.id} with Paystack: {e}")
+    db.refresh(payment)
 
 
 @router.post("/{payment_id}/cancel", response_model=PaymentStatusOut)
@@ -609,6 +616,8 @@ def dev_confirm_payment(
     if payment.method == "card":
         # Paystack's test mode already is the simulation: card 4084 0840 8408 4081.
         raise HTTPException(status_code=400, detail="This is a card payment. Finish it on Paystack's page instead.")
+    if payment.method == "wallet":
+        raise HTTPException(status_code=400, detail="A wallet payment is confirmed straight away; there's nothing to simulate.")
     if payment.status != PaymentStatus.INITIATED:
         raise HTTPException(status_code=400, detail=f"Payment already {payment.status.value}")
 

@@ -77,6 +77,27 @@ def current_fees(db: Session) -> Fees:
     return fees_from_row(row) if row else DEFAULT_FEES
 
 
+def resale_fee_split(price_kes: float, royalty_percent: float, platform_fee_percent: float) -> tuple[int, int, float]:
+    """
+    (royalty_kes, platform_fee_kes, seller_payout_kes) for a resale.
+
+    Money moves in whole shillings (M-Pesa has no cents), so each fee is
+    rounded DOWN to the shilling: a fee never comes to more than its stated
+    percentage. Rounding to nearest made a KES 12 sale show the 5% fee as
+    KES 1, the same as the 10% royalty. The seller gets the remainder, so
+    the three always add up to the price exactly.
+
+    The single source for this split: the listing preview
+    (app/api/routes/resale.py) and the settlement that records it
+    (app/worker.py settle_resale_transfer) both call it.
+    """
+    # The epsilon stops float error (a percentage that should come to exactly
+    # 3 coming out as 2.9999999999999996) from costing a whole shilling.
+    royalty_kes = int(price_kes * royalty_percent / 100 + 1e-9)
+    platform_fee_kes = int(price_kes * platform_fee_percent / 100 + 1e-9)
+    return royalty_kes, platform_fee_kes, price_kes - royalty_kes - platform_fee_kes
+
+
 # ── Feature flags ────────────────────────────────────────────────────────────
 
 @dataclass(frozen=True)

@@ -80,11 +80,16 @@ export default function SellWizard() {
     loadTickets();
   }
 
+  // Same split the server records at settlement (platform_settings.resale_fee_split):
+  // whole shillings, each fee rounded down so it never exceeds its percentage.
   const royaltyPct = selected?.royalty_percent ?? 0;
-  const platformPct = 5;
-  const royaltyKes = Math.round(price * (royaltyPct / 100));
-  const platformKes = Math.round(price * (platformPct / 100));
+  const platformPct = selected?.platform_fee_percent ?? 5;
+  const escrowDays = selected?.escrow_days ?? 2;
+  const royaltyKes = Math.floor(price * (royaltyPct / 100) + 1e-9);
+  const platformKes = Math.floor(price * (platformPct / 100) + 1e-9);
   const youReceive = price - royaltyKes - platformKes;
+  const roundedDown =
+    price * (royaltyPct / 100) - royaltyKes > 1e-6 || price * (platformPct / 100) - platformKes > 1e-6;
 
   return (
     <div className="mx-auto max-w-2xl px-4 py-6 flex flex-col gap-6">
@@ -150,7 +155,7 @@ export default function SellWizard() {
               aria-label="Listing price"
               min={selected.floor}
               max={selected.ceiling}
-              step={10}
+              step={1}
               value={price}
               onChange={(e) => updatePrice(e.target.value)}
               className="accent-brand-primary"
@@ -186,8 +191,13 @@ export default function SellWizard() {
               <span>You receive</span>
               <MoneyText value={youReceive} size="h3" variant="positive" />
             </div>
+            {roundedDown && (
+              <p className="text-caption text-ink-tertiary">Fees are in whole shillings, rounded down in your favour.</p>
+            )}
           </Card>
-          <p className="text-caption text-ink-tertiary">Funds are held in escrow and released 2 days after the event ends.</p>
+          <p className="text-caption text-ink-tertiary">
+            Funds are held in escrow and released {escrowDays} day{escrowDays === 1 ? "" : "s"} after the event.
+          </p>
 
           <div className="flex gap-2">
             <Button variant="secondary" onClick={() => setStep(0)} className="flex-1">Back</Button>

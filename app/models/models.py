@@ -122,6 +122,7 @@ class NotificationStatus(str, enum.Enum):
 class WalletTransactionType(str, enum.Enum):
     SALE        = "sale"
     WITHDRAWAL  = "withdrawal"
+    PURCHASE    = "purchase"   # the balance paid for a resale ticket
 
 
 class WalletTransactionStatus(str, enum.Enum):
@@ -556,8 +557,10 @@ class Payment(Base):
     # The M-Pesa number charged; for a card payment, the buyer's own number.
     phone_number: Mapped[str] = mapped_column(String(15), nullable=False)
 
-    # "mpesa" (an STK push: the Daraja fields above) or "card" (a Paystack
-    # transaction: the fields below). See app/services/paystack_service.py.
+    # "mpesa" (an STK push: the Daraja fields above), "card" (a Paystack
+    # transaction: the fields below; app/services/paystack_service.py) or
+    # "wallet" (a resale ticket paid from the buyer's ChainTix balance: a
+    # PURCHASE WalletTransaction, no outside provider).
     method: Mapped[str] = mapped_column(String(10), default="mpesa", server_default="mpesa", nullable=False)
     provider_reference: Mapped[str | None] = mapped_column(String(100), index=True, unique=True)  # Paystack reference
     provider_transaction_id: Mapped[str | None] = mapped_column(String(50))  # Paystack's transaction ID
@@ -574,12 +577,18 @@ class Payment(Base):
 
     @property
     def reference(self) -> str | None:
-        """The provider's own reference: the M-Pesa receipt or the Paystack reference."""
+        """The provider's own reference: the M-Pesa receipt or the Paystack
+        reference. A wallet payment never left ChainTix, so it has none."""
+        if self.method == "wallet":
+            return None
         return self.provider_reference if self.method == "card" else self.mpesa_receipt_number
 
     @property
     def paid_with(self) -> str | None:
-        """How the buyer paid, as they'd recognise it: "M-Pesa OEI2AK4MFU" or "Visa •••• 4242"."""
+        """How the buyer paid, as they'd recognise it: "M-Pesa OEI2AK4MFU",
+        "Visa •••• 4242" or "ChainTix wallet"."""
+        if self.method == "wallet":
+            return "ChainTix wallet" if self.status == PaymentStatus.SUCCESS else None
         if self.method == "card":
             if self.status != PaymentStatus.SUCCESS:
                 return None

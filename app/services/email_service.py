@@ -114,8 +114,15 @@ FOOTER = ("You're receiving this because you bought or were sent a ticket on Cha
 
 def purchase_receipt(*, name: str | None, order_ref: str, event_title: str, event_date: datetime | None,
                      venue: str, tier_name: str, quantity: int, amount_kes: float, mpesa_receipt: str | None,
-                     card: str | None = None, paid_at: datetime | None, phone: str, resale: bool, tickets_url: str) -> tuple[str, str, str]:
+                     card: str | None = None, wallet: bool = False, paid_at: datetime | None, phone: str, resale: bool,
+                     tickets_url: str) -> tuple[str, str, str]:
     """(subject, text, html) for a confirmed payment."""
+    if wallet:
+        paid_rows = [("Paid from", "Your ChainTix wallet")]
+    elif card:
+        paid_rows = [("Paid by card", card)]
+    else:
+        paid_rows = [("M-Pesa receipt", mpesa_receipt or "—"), ("Paid from", phone)]
     what = "resale ticket" if resale else f"ticket{'s' if quantity != 1 else ''}"
     heading = f"You're going to {event_title}"
     intro = (f"Hi {name.split()[0]}, " if name else "Hi, ") + (
@@ -128,7 +135,7 @@ def purchase_receipt(*, name: str | None, order_ref: str, event_title: str, even
         ("Where", venue),
         ("Ticket", f"{quantity} × {tier_name}{' (resale)' if resale else ''}"),
         ("Total paid", kes(amount_kes)),
-        *([("Paid by card", card)] if card else [("M-Pesa receipt", mpesa_receipt or "—"), ("Paid from", phone)]),
+        *paid_rows,
         ("Paid on", nairobi_time(paid_at, with_weekday=False)),
         ("Order", order_ref),
     ]

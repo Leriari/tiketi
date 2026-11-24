@@ -220,3 +220,184 @@ def test_same_buyer_can_retry_a_timed_out_prompt(people, event):
     assert client.get(f"{API}/resale/purchases/{second}", headers=people["buyer"]).json()["status"] == "awaiting_payment"
     # A different buyer still can't jump in.
     assert _buy(people, listing_id, "buyer2").status_code == 409
+
+
+# ── Paying by card (Paystack) and from the ChainTix wallet ──────────────────
+
+def _user_id(headers) -> str:
+    return client.get(f"{API}/me/profile", headers=headers).json()["user"]["id"]
+
+
+def _fund_wallet(headers, amount, *, available=True):
+    """Give a user an earned resale balance: available now, or still in escrow."""
+    from app.models.models import WalletTransaction, WalletTransactionType
+    db = TestingSessionLocal()
+    try:
+        db.add(WalletTransaction(
+            user_id=_user_id(headers), type=WalletTransactionType.SALE, description="Resale · test",
+            amount_kes=amount,
+            available_at=datetime.utcnow() + (timedelta(days=-1) if available else timedelta(days=5)),
+        ))
+        db.commit()
+    finally:
+        db.close()
+
+
+def _wallet(headers) -> dict:
+    return client.get(f"{API}/resale/wallet", headers=headers).json()
+
+
+def _transfer_status(listing_id):
+    db = TestingSessionLocal()
+    try:
+        return db.query(Transfer).filter(Transfer.id == listing_id).one().status
+    finally:
+        db.close()
+
+
+def test_buy_with_wallet_balance(people, event):
+    from app.models.models import WalletTransaction, WalletTransactionType
+    listing_id = _seller_listing(people, event, price=1100)
+    _fund_wallet(people["buyer"], 1500)
+    before = _wallet(people["buyer"])["available"]
+    db = TestingSessionLocal()
+    try:
+        sold_before = db.query(Event).filter(Event.id == event["id"]).one().tickets_sold
+    finally:
+        db.close()
+
+    res = client.post(f"{API}/resale/listings/{listing_id}/buy", json={"method": "wallet"}, headers=people["buyer"])
+    assert res.status_code == 201, res.text
+    assert res.json()["method"] == "wallet"
+    payment_id = res.json()["payment_id"]
+
+    # Paid at once: straight on to moving the ticket, no prompt to wait for.
+    assert client.get(f"{API}/resale/purchases/{payment_id}", headers=people["buyer"]).json()["status"] == "transferring"
+    assert _transfer_status(listing_id) == TransferStatus.PAID
+    wallet = _wallet(people["buyer"])
+    assert wallet["available"] == before - 1100
+    spend = next(t for t in wallet["transactions"] if t["type"] == "purchase")
+    assert spend["amount"] == -1100
+
+    db = TestingSessionLocal()
+    try:
+        payment = db.query(Payment).filter(Payment.id == payment_id).one()
+        assert payment.method == "wallet" and payment.paid_with == "ChainTix wallet" and payment.reference is None
+        # A resale moves an existing ticket; it isn't a new sale for the event.
+        assert db.query(Event).filter(Event.id == event["id"]).one().tickets_sold == sold_before
+        assert db.query(WalletTransaction).filter(WalletTransaction.type == WalletTransactionType.PURCHASE,
+                                                  WalletTransaction.transfer_id == listing_id).count() == 1
+    finally:
+        db.close()
+
+
+def test_wallet_must_cover_the_price(people, event):
+    listing_id = _seller_listing(people, event, price=1100)
+    available = _wallet(people["buyer2"])["available"]
+    # Money still in escrow can't be spent.
+    _fund_wallet(people["buyer2"], 5000, available=False)
+
+    res = client.post(f"{API}/resale/listings/{listing_id}/buy", json={"method": "wallet"}, headers=people["buyer2"])
+    assert res.status_code == 400 and "wallet balance" in res.json()["detail"]
+    assert _transfer_status(listing_id) == TransferStatus.LISTED
+    assert _wallet(people["buyer2"])["available"] == available
+
+
+def test_mpesa_still_needs_a_phone_number(people, event):
+    listing_id = _seller_listing(people, event)
+    res = client.post(f"{API}/resale/listings/{listing_id}/buy", json={"method": "mpesa"}, headers=people["buyer"])
+    assert res.status_code == 422
+
+
+@pytest.fixture
+def card(monkeypatch, people):
+    from tests.test_card_payments import FakePaystack, SECRET
+    from app.api.routes import payments
+    from app.services import paystack_service
+    from app.core.config import get_settings
+    from app.models.models import User
+
+    fake = FakePaystack()
+    monkeypatch.setattr(paystack_service, "initialize_transaction", fake.initialize)
+    monkeypatch.setattr(paystack_service, "verify_transaction", fake.verify)
+    for settings in {id(s): s for s in (payments.settings, paystack_service.settings, get_settings())}.values():
+        monkeypatch.setattr(settings, "PAYSTACK_SECRET_KEY", SECRET)
+    db = TestingSessionLocal()
+    try:  # Paystack needs an email for its receipt.
+        db.query(User).filter(User.id == _user_id(people["buyer"])).update({"email": "resale.buyer@example.com"})
+        db.commit()
+    finally:
+        db.close()
+    return fake
+
+
+def _buy_by_card(people, listing_id, who="buyer"):
+    return client.post(f"{API}/resale/listings/{listing_id}/buy", json={"method": "card"}, headers=people[who])
+
+
+def test_buy_by_card(people, event, card):
+    listing_id = _seller_listing(people, event, price=1150)
+    res = _buy_by_card(people, listing_id)
+    assert res.status_code == 201, res.text
+    body = res.json()
+    assert body["method"] == "card" and body["checkout_url"].startswith("https://checkout.paystack.com/")
+    payment_id = body["payment_id"]
+    # Paystack sends the buyer back to this listing's checkout.
+    assert f"/resale/{listing_id}?payment={payment_id}&card=done" in card.initialized[-1]["callback_url"]
+    assert card.initialized[-1]["amount_kes"] == 1150
+
+    # Held for them while they're on Paystack's page.
+    assert _buy(people, listing_id, "buyer2").status_code == 409
+    assert client.get(f"{API}/resale/purchases/{payment_id}", headers=people["buyer"]).json()["status"] == "awaiting_payment"
+
+    card.pay(payment_id)
+    # The buyer's poll asks Paystack, which confirms it.
+    assert client.get(f"{API}/resale/purchases/{payment_id}", headers=people["buyer"]).json()["status"] == "transferring"
+    assert _transfer_status(listing_id) == TransferStatus.PAID
+    db = TestingSessionLocal()
+    try:
+        assert db.query(Payment).filter(Payment.id == payment_id).one().paid_with == "Visa •••• 4081"
+    finally:
+        db.close()
+
+
+def test_card_hold_outlasts_an_mpesa_prompt(people, event, card):
+    listing_id = _seller_listing(people, event)
+    payment_id = _buy_by_card(people, listing_id).json()["payment_id"]
+
+    def age(minutes):
+        db = TestingSessionLocal()
+        try:
+            db.query(Payment).filter(Payment.id == payment_id).update(
+                {"initiated_at": datetime.utcnow() - timedelta(minutes=minutes)})
+            db.commit()
+        finally:
+            db.close()
+
+    age(6)  # an M-Pesa purchase would have been released by now
+    assert client.get(f"{API}/resale/purchases/{payment_id}", headers=people["buyer"]).json()["status"] == "awaiting_payment"
+    age(31)
+    status = client.get(f"{API}/resale/purchases/{payment_id}", headers=people["buyer"]).json()
+    assert status["status"] == "failed" and "card payment" in status["failure_reason"]
+    assert _transfer_status(listing_id) == TransferStatus.LISTED
+
+
+def test_cancelling_on_paystack_puts_the_listing_back(people, event, card):
+    listing_id = _seller_listing(people, event)
+    payment_id = _buy_by_card(people, listing_id).json()["payment_id"]
+    res = client.post(f"{API}/payments/{payment_id}/cancel", headers=people["buyer"])
+    assert res.status_code == 200 and res.json()["status"] == "failed"
+    assert _transfer_status(listing_id) == TransferStatus.LISTED
+    assert _buy(people, listing_id, "buyer2").status_code == 201
+
+
+def test_fees_never_round_up():
+    from app.services.platform_settings import resale_fee_split
+    # KES 12: 10% is 1.2 and 5% is 0.6. Rounded down, the 5% fee can't
+    # come out the same as the 10% royalty.
+    assert resale_fee_split(12, 10, 5) == (1, 0, 11)
+    assert resale_fee_split(1100, 10, 5) == (110, 55, 935)
+    for price in range(1, 500):
+        royalty, fee, payout = resale_fee_split(price, 10, 5)
+        assert royalty <= price * 0.10 and fee <= price * 0.05
+        assert royalty + fee + payout == price

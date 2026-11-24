@@ -156,7 +156,7 @@ def settle_resale_transfer(self, transfer_id: str):
     from app.services import web3_service
     from app.services.totp_service import generate_totp_secret
     from app.core.crypto import encrypt_secret
-    from app.services.platform_settings import current_fees
+    from app.services.platform_settings import current_fees, resale_fee_split
 
     if not settings.BLOCKCHAIN_CONFIGURED:
         logger.info(f"[SKIP] Blockchain not configured — transfer={transfer_id} stays unsettled.")
@@ -189,9 +189,7 @@ def settle_resale_transfer(self, transfer_id: str):
         royalty_percent = tier.organizer_royalty_percent if tier else 0.0
         price = transfer.asking_price_kes
         fees = current_fees(db)  # the rates in force when the sale settles
-        royalty_kes = round(price * royalty_percent / 100)
-        platform_fee_kes = round(price * fees.platform_fee_percent / 100)
-        payout_kes = price - royalty_kes - platform_fee_kes
+        royalty_kes, platform_fee_kes, payout_kes = resale_fee_split(price, royalty_percent, fees.platform_fee_percent)
 
         transfer.status = TransferStatus.COMPLETED
         transfer.settlement_tx_hash = tx_hash
@@ -357,6 +355,7 @@ def send_payment_receipt(self, payment_id: str, force: bool = False):
             amount_kes=payment.amount_kes,
             mpesa_receipt=payment.mpesa_receipt_number,
             card=payment.paid_with if payment.method == "card" else None,
+            wallet=payment.method == "wallet",
             paid_at=payment.confirmed_at,
             phone=_local_phone(payment.phone_number or user.phone_number),
             resale=bool(transfer),
