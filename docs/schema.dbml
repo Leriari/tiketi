@@ -1,0 +1,524 @@
+// TiketiKE / ChainTix database schema
+// Generated from app/models/models.py (alembic head). PostgreSQL 16 in production.
+// Docs: https://dbml.dbdiagram.io/docs
+
+Enum organizerverificationstatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+Enum eventstatus {
+  DRAFT
+  PUBLISHED
+  PAUSED
+  SOLD_OUT
+  CANCELLED
+  COMPLETED
+}
+
+Enum notificationstatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+Enum organizerrole {
+  OWNER
+  STAFF
+}
+
+Enum tierstatus {
+  ACTIVE
+  SOLD_OUT
+  CLOSED
+}
+
+Enum gatescannerstatus {
+  ACTIVE
+  INACTIVE
+}
+
+Enum pricecapchangetype {
+  INITIAL
+  ADJUSTED
+}
+
+Enum ticketstatus {
+  PENDING_PAYMENT
+  ACTIVE
+  USED
+  CANCELLED
+  RESALE
+}
+
+Enum attendancestatus {
+  ADMITTED
+  DENIED
+}
+
+Enum barcodestatus {
+  ACTIVE
+  REVOKED
+  EXPIRED
+}
+
+Enum paymentstatus {
+  INITIATED
+  SUCCESS
+  FAILED
+  TIMEOUT
+}
+
+Enum transfertype {
+  RESALE
+  GIFT
+}
+
+Enum transferstatus {
+  LISTED
+  PAUSED
+  PENDING_PAYMENT
+  PAID
+  COMPLETED
+  CANCELLED
+  EXPIRED
+  SETTLEMENT_FAILED
+}
+
+Enum wallettransactiontype {
+  SALE
+  WITHDRAWAL
+}
+
+Enum wallettransactionstatus {
+  SUCCESS
+  PENDING
+  FAILED
+}
+
+Enum payoutstatus {
+  PENDING_APPROVAL
+  PROCESSING
+  PAID
+  FAILED
+  REJECTED
+}
+
+Table organizers {
+  id varchar(36) [pk]
+  business_name varchar(255) [not null]
+  kra_pin varchar(20)
+  verification_status organizerverificationstatus [not null]
+  mpesa_paybill varchar(20)
+  royalty_wallet_address varchar(42)
+  contact_email varchar(255)
+  contact_phone varchar(15)
+  payout_method varchar(20)
+  payout_destination varchar(50)
+  payout_account varchar(20)
+  payout_label varchar(100)
+  created_at timestamp [not null]
+  review_reason text
+  reviewed_at timestamp
+  suspended_at timestamp
+  suspended_reason text
+
+  Note: 'An event-organizing business. Created PENDING by app/api/routes/organisations.py; a platform admin verifies or rejects it, and can suspend it (app/api/routes/admin.py).'
+}
+
+Table users {
+  id varchar(36) [pk]
+  phone_number varchar(15) [not null, unique]
+  phone_verified boolean [not null, default: true]
+  display_name varchar(100)
+  email varchar(255) [unique]
+  email_verified boolean [not null, default: false]
+  google_sub varchar(255) [unique]
+  session_version integer [not null, default: 0]
+  is_active boolean [not null]
+  created_at timestamp [not null]
+  wallet_address varchar(42)
+  external_wallet_address varchar(42)
+  is_organizer boolean [not null]
+  is_platform_admin boolean [not null]
+  platform_admin_role varchar(20)
+  platform_admin_since timestamp
+
+  Note: 'Maps to the report\'s "accounts" entity.'
+}
+
+Table admin_invites {
+  id varchar(36) [pk]
+  phone_number varchar(15) [not null, unique]
+  name varchar(100) [not null]
+  role varchar(20) [not null]
+  invited_by varchar(36)
+  created_at timestamp [not null]
+
+  Note: 'A pending platform-admin invite for a phone number with no account yet. Applied (and deleted) the first time that number signs in — app/services/auth_service.issue_session.'
+}
+
+Table audit_logs {
+  id varchar(36) [pk]
+  actor_id varchar(36)
+  action_type varchar(50) [not null]
+  target_id varchar(36)
+  target_type varchar(50)
+  details text
+  created_at timestamp [not null]
+
+  Note: 'System/actor action trail. Not yet wired to any route.'
+}
+
+Table broadcasts {
+  id varchar(36) [pk]
+  message text [not null]
+  channels json [not null]
+  audience varchar(20) [not null]
+  audience_size integer [not null]
+  scheduled_for timestamp
+  created_by varchar(36)
+  created_at timestamp [not null]
+
+  Note: 'An announcement from Communication Center. Delivered in-app: the site shows it to its audience from scheduled_for (or creation) on.'
+}
+
+Table events {
+  id varchar(36) [pk]
+  organizer_id varchar(36)
+  created_by_user_id varchar(36)
+  title varchar(255) [not null]
+  description text
+  venue varchar(255) [not null]
+  event_date timestamp [not null]
+  organizer_phone varchar(15) [not null]
+  total_capacity integer [not null]
+  tickets_sold integer [not null]
+  contract_address varchar(42)
+  status eventstatus [not null]
+  created_at timestamp [not null]
+  category varchar(50)
+  description_html text
+  image_data bytea
+  image_mime varchar(30)
+  image_updated_at timestamp
+  ends_at timestamp
+  artists json
+  gates json
+  resale_enabled boolean [not null, default: true]
+  resale_window_open_days integer [not null, default: 0]
+  resale_window_close_hours integer [not null, default: 2]
+  review_state varchar(20)
+  review_note text
+  submitted_for_review_at timestamp
+}
+
+Table feature_flags {
+  "key" varchar(50) [pk]
+  enabled boolean [not null]
+  rollout_percent integer [not null]
+  updated_by varchar(36)
+  updated_at timestamp [not null]
+
+  Note: 'A switch an admin flips in Feature Flags. Every key is defined, with its default and what it controls, in app/services/platform_settings.py; a row exists only once an admin has changed it.'
+}
+
+Table fee_schedule {
+  id varchar(36) [pk]
+  platform_fee_percent float [not null]
+  scanning_fee_kes float [not null]
+  min_payout_kes float [not null]
+  seller_escrow_days integer [not null]
+  organiser_escrow_days integer [not null]
+  effective_from timestamp [not null]
+  changed_by varchar(36)
+
+  indexes {
+    effective_from [name: 'ix_fee_schedule_effective_from']
+  }
+
+  Note: 'Platform fees, one row per change (Admin → Fee Configuration). The row in effect at a moment is the latest with effective_from <= that moment, so a change applies going forward only: a sale is always charged at the rates in force when it was paid. No rows means the built-in defaults (app/services/platform_settings.py).'
+}
+
+Table notifications {
+  id varchar(36) [pk]
+  recipient_id varchar(36) [not null]
+  notification_type varchar(50) [not null]
+  channel varchar(20) [not null]
+  reference varchar(64)
+  status notificationstatus [not null]
+  sent_at timestamp
+  created_at timestamp [not null]
+
+  indexes {
+    reference [name: 'ix_notifications_reference']
+  }
+
+  Note: 'Outbound message record. Written for every email ChainTix sends (app/worker.py): reference is what it was about (a payment or transfer id), so a retried task never sends the same receipt twice.'
+}
+
+Table organizer_members {
+  id varchar(36) [pk]
+  organizer_id varchar(36) [not null]
+  account_id varchar(36) [not null]
+  role organizerrole [not null]
+  created_at timestamp [not null]
+
+  Note: 'Links a User account to an Organizer with a role (OWNER/STAFF). Wired via app/api/routes/organisations.py and enforced by app/core/authz.py\'s require_org_role/require_event_org_role (Work Order 04 B2/B3).'
+}
+
+Table event_tiers {
+  id varchar(36) [pk]
+  event_id varchar(36) [not null]
+  tier_name varchar(100) [not null]
+  price_kes float [not null]
+  capacity integer [not null]
+  tickets_sold integer [not null]
+  resale_floor_price_kes float [not null]
+  resale_ceiling_price_kes float [not null]
+  organizer_royalty_percent float [not null]
+  status tierstatus [not null]
+  created_at timestamp [not null]
+  description text
+  per_order_max integer
+  visibility varchar(20) [not null, default: 'public']
+  sales_start timestamp
+  sales_end timestamp
+  sort_order integer [not null, default: 0]
+
+  Note: 'Per-tier pricing/capacity/resale rules — replaces the old flat Event pricing fields.'
+}
+
+Table gate_scanners {
+  id varchar(36) [pk]
+  event_id varchar(36) [not null]
+  organizer_id varchar(36)
+  account_id varchar(36)
+  gate_name varchar(100) [not null]
+  label varchar(100)
+  device_id varchar(100) [unique]
+  enrollment_code varchar(20)
+  enrollment_code_expires_at timestamp
+  device_token_hash varchar(64)
+  last_sync_at timestamp
+  status gatescannerstatus [not null]
+  created_at timestamp [not null]
+
+  indexes {
+    device_token_hash [name: 'ix_gate_scanners_device_token_hash']
+    enrollment_code [name: 'ix_gate_scanners_enrollment_code']
+  }
+
+  Note: 'A registered gate-scanning device. Wired via app/api/routes/gate.py\'s /gate/scanners (register + revoke) and /gate/enroll (Work Order 04 B4).'
+}
+
+Table price_caps {
+  id varchar(36) [pk]
+  event_id varchar(36) [not null]
+  tier_id varchar(36) [not null]
+  cap_price_kes float [not null]
+  floor_price_kes float [not null]
+  change_type pricecapchangetype [not null]
+  effective_at timestamp [not null]
+  created_at timestamp [not null]
+
+  Note: 'Audit trail of resale price-bound adjustments for a tier. Not yet wired to any route.'
+}
+
+Table tickets {
+  id varchar(36) [pk]
+  event_id varchar(36) [not null]
+  tier_id varchar(36)
+  owner_id varchar(36) [not null]
+  gate_scanner_id varchar(36)
+  group_payment_id varchar(36)
+  status ticketstatus [not null]
+  nft_token_id integer
+  nft_tx_hash varchar(66)
+  nft_contract_address varchar(42)
+  onchain_face_kes integer
+  onchain_floor_kes integer
+  onchain_cap_kes integer
+  used_tx_hash varchar(66)
+  seat_number varchar(20)
+  is_complimentary boolean [not null, default: false]
+  complimentary_note varchar(255)
+  recipient_name varchar(100)
+  purchased_at timestamp
+  used_at timestamp
+  created_at timestamp [not null]
+}
+
+Table attendances {
+  id varchar(36) [pk]
+  ticket_id varchar(36)
+  scanned_ref varchar(64)
+  event_id varchar(36) [not null]
+  scanner_id varchar(36)
+  scan_time timestamp [not null]
+  status attendancestatus [not null]
+  denial_reason varchar(30)
+
+  Note: 'A single scan attempt at the gate, admitted or denied. Wired via POST /gate/scan-upload (Work Order 05 B5) — the offline scanner\'s reconciliation endpoint, written once connectivity returns — and by the Organiser Console\'s Live QR Scanner, which checks online and records each decision as it makes it.'
+}
+
+Table barcodes {
+  id varchar(36) [pk]
+  ticket_id varchar(36) [not null]
+  event_id varchar(36) [not null]
+  owner_id varchar(36) [not null]
+  token text [not null]
+  token_version integer [not null]
+  status barcodestatus [not null]
+  expires_at timestamp
+  created_at timestamp [not null]
+
+  Note: 'A versioned ticket credential. Replaces the old single `Ticket.totp_secret` column — keeping a history table lets a credential be rotated or reissued (transfer, device loss) without losing the trail, per the report\'s "barcodes" entity.'
+}
+
+Table payments {
+  id varchar(36) [pk]
+  ticket_id varchar(36) [not null]
+  tier_id varchar(36)
+  user_id varchar(36) [not null]
+  quantity integer [not null]
+  amount_kes float [not null]
+  status paymentstatus [not null]
+  merchant_request_id varchar(100)
+  checkout_request_id varchar(100) [unique]
+  mpesa_receipt_number varchar(50)
+  phone_number varchar(15) [not null]
+  method varchar(10) [not null, default: 'mpesa']
+  provider_reference varchar(100) [unique]
+  provider_transaction_id varchar(50)
+  card_brand varchar(20)
+  card_last4 varchar(4)
+  initiated_at timestamp [not null]
+  confirmed_at timestamp
+  failure_reason varchar(255)
+
+  indexes {
+    merchant_request_id [name: 'ix_payments_merchant_request_id']
+  }
+}
+
+Table transfers {
+  id varchar(36) [pk]
+  ticket_id varchar(36) [not null]
+  event_id varchar(36) [not null]
+  seller_id varchar(36) [not null]
+  buyer_id varchar(36)
+  payment_id varchar(36)
+  transfer_type transfertype [not null]
+  status transferstatus [not null]
+  asking_price_kes float [not null]
+  transfer_price_kes float
+  organizer_royalty_kes float
+  platform_fee_kes float
+  seller_payout_kes float
+  listing_tx_hash varchar(66)
+  settlement_tx_hash varchar(66)
+  views integer [not null]
+  pause_reason varchar(255)
+  transferred_at timestamp
+  cancelled_at timestamp
+  created_at timestamp [not null]
+
+  Note: 'A resale listing and, if it sells, the completed secondary-market transaction — one row covers the whole lifecycle (Work Order 02).'
+}
+
+Table wallet_transactions {
+  id varchar(36) [pk]
+  user_id varchar(36) [not null]
+  transfer_id varchar(36)
+  "type" wallettransactiontype [not null]
+  description varchar(255) [not null]
+  amount_kes float [not null]
+  status wallettransactionstatus [not null]
+  available_at timestamp
+  created_at timestamp [not null]
+
+  Note: 'A seller\'s earnings ledger (Work Order 02). One row per completed resale payout or M-Pesa withdrawal. A withdrawal\'s status follows its Payout: pending while it\'s being sent, failed (and back in the balance) if it didn\'t go through. No table for this existed in the original 14-table schema — resale payouts are new money movement this project didn\'t have before, so this is an addition, not a repurposing of an unwired table like Transfer was.'
+}
+
+Table payouts {
+  id varchar(36) [pk]
+  recipient_type varchar(10) [not null]
+  user_id varchar(36) [not null]
+  organizer_id varchar(36)
+  wallet_transaction_id varchar(36)
+  channel varchar(10) [not null]
+  destination varchar(20) [not null]
+  account_reference varchar(20)
+  destination_label varchar(100)
+  amount_kes float [not null]
+  charge_kes float [not null]
+  net_kes float [not null]
+  status payoutstatus [not null]
+  reviewed_by varchar(36)
+  reviewed_at timestamp
+  review_note text
+  originator_conversation_id varchar(64)
+  conversation_id varchar(64)
+  mpesa_receipt varchar(20)
+  recipient_name varchar(255)
+  result_code varchar(20)
+  result_desc text
+  result_payload json
+  manual boolean [not null]
+  created_at timestamp [not null]
+  sent_at timestamp
+  completed_at timestamp
+
+  indexes {
+    conversation_id [name: 'ix_payouts_conversation_id']
+    organizer_id [name: 'ix_payouts_organizer_id']
+    originator_conversation_id [name: 'ix_payouts_originator_conversation_id']
+  }
+
+  Note: 'Money ChainTix sends out: a seller withdrawing their wallet, or an organiser\'s payout request. app/services/payouts.py moves it through its stages; Safaricom\'s B2C API pays an M-Pesa number and its B2B API a paybill or till.'
+}
+
+// Relationships (many-to-one)
+Ref: admin_invites.invited_by > users.id
+Ref: audit_logs.actor_id > users.id
+Ref: broadcasts.created_by > users.id
+Ref: events.organizer_id > organizers.id
+Ref: events.created_by_user_id > users.id
+Ref: feature_flags.updated_by > users.id
+Ref: fee_schedule.changed_by > users.id
+Ref: notifications.recipient_id > users.id
+Ref: organizer_members.organizer_id > organizers.id
+Ref: organizer_members.account_id > users.id
+Ref: event_tiers.event_id > events.id
+Ref: gate_scanners.event_id > events.id
+Ref: gate_scanners.organizer_id > organizers.id
+Ref: gate_scanners.account_id > users.id
+Ref: price_caps.event_id > events.id
+Ref: price_caps.tier_id > event_tiers.id
+Ref: tickets.event_id > events.id
+Ref: tickets.tier_id > event_tiers.id
+Ref: tickets.owner_id > users.id
+Ref: tickets.gate_scanner_id > gate_scanners.id
+Ref: tickets.group_payment_id > payments.id
+Ref: attendances.ticket_id > tickets.id
+Ref: attendances.event_id > events.id
+Ref: attendances.scanner_id > gate_scanners.id
+Ref: barcodes.ticket_id > tickets.id
+Ref: barcodes.event_id > events.id
+Ref: barcodes.owner_id > users.id
+Ref: payments.ticket_id > tickets.id
+Ref: payments.tier_id > event_tiers.id
+Ref: payments.user_id > users.id
+Ref: transfers.ticket_id > tickets.id
+Ref: transfers.event_id > events.id
+Ref: transfers.seller_id > users.id
+Ref: transfers.buyer_id > users.id
+Ref: transfers.payment_id > payments.id
+Ref: wallet_transactions.user_id > users.id
+Ref: wallet_transactions.transfer_id > transfers.id
+Ref: payouts.user_id > users.id
+Ref: payouts.organizer_id > organizers.id
+Ref: payouts.wallet_transaction_id > wallet_transactions.id
+Ref: payouts.reviewed_by > users.id
