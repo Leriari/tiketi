@@ -1,7 +1,7 @@
 import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-router-dom";
 import ScrollToTop from "./ScrollToTop";
 import AuthErrorToast from "./AuthErrorToast";
-import { RequireAuth, RequireOrgMembership, RequirePlatformAdmin, RequireDeviceToken } from "./routeGuards";
+import { RequireAuth, RequireAuthOrSavedTickets, RequireOrgMembership, RequirePlatformAdmin, RequireDeviceToken } from "./routeGuards";
 import { AuthProvider, useAuth } from "./context/AuthContext";
 import { usingMockBackend } from "./api";
 import { ToastProvider } from "./components/ui/Toast";
@@ -154,13 +154,15 @@ export default function App() {
                 <Route path="/resale/:listingId" element={<ResaleCheckout />} />
                 <Route path="/checkout/:eventId" element={<Checkout />} />
                 <Route path="/confirmation/:ticketId" element={<Confirmation />} />
-                <Route path="/tickets" element={<MyTickets />} />
-                <Route path="/tickets/:ticketId" element={<TicketCredential />} />
                 <Route path="/profile" element={<Profile />} />
                 {/* Outside the console's own guard: it's for people with no organisation yet. */}
                 <Route path="/organiser/register" element={<OrganiserRegister />} />
                 {/* The old Account page grew into the cross-role profile. */}
                 <Route path="/account" element={<Navigate to="/profile" replace />} />
+              </Route>
+              <Route element={<RequireAuthOrSavedTickets />}>
+                <Route path="/tickets" element={<MyTickets />} />
+                <Route path="/tickets/:ticketId" element={<TicketCredential />} />
               </Route>
               <Route path="*" element={<NotFound />} />
             </Route>

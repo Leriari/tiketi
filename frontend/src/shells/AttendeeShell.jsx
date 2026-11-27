@@ -1,4 +1,6 @@
+import { useEffect } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { enableOfflineShell } from "../lib/offlineShell";
 import { Compass, Ticket, User, Search, LogIn, Repeat } from "lucide-react";
 import { ThemeProvider } from "../theme/ThemeProvider";
 import { ThemeToggle, Button, Avatar, DropdownMenu } from "../components/ui";
@@ -42,6 +44,10 @@ export default function AttendeeShell() {
   const navigate = useNavigate();
   const location = useLocation();
   const { isAuthed, user, roles, logout } = useAuth();
+  // Tickets have to open at a gate with no signal (lib/offlineTickets.js).
+  useEffect(() => {
+    enableOfflineShell();
+  }, []);
   const access = useSurfaceAccess();
 
   const loginHref = `/login?return=${encodeURIComponent(location.pathname + location.search)}`;
@@ -53,6 +59,7 @@ export default function AttendeeShell() {
       ? { label: "Organiser Console", onClick: () => navigate("/organiser") }
       : { label: "Become an organiser", onClick: () => navigate("/organiser/register") },
     ...(access.admin ? [{ label: "Platform admin", onClick: () => navigate("/admin") }] : []),
+    ...(access.organiser ? [{ label: "Gate scanner", onClick: () => navigate("/scanner") }] : []),
     { label: "Log out", danger: true, onClick: () => { logout(); navigate("/"); } },
   ];
 

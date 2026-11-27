@@ -1,7 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { useCallback, useEffect, useState } from "react";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { WifiOff, Sun, Repeat, UserPlus, CheckCircle2, Tag, Mail, Receipt } from "lucide-react";
-import { api, ApiError } from "../../api";
+import { api, ApiError, usingMockBackend } from "../../api";
+import { computeTotp } from "../../scanner/totp";
+import { saveTicket, savedTicket, forgetTicket, forgetTicketSecret } from "../../lib/offlineTickets";
 import { useToast } from "../../components/ui/Toast";
 import { useAuth } from "../../context/AuthContext";
 import {
@@ -29,33 +31,62 @@ function when(iso) {
   return iso ? new Date(iso).toLocaleString("en-KE", { day: "2-digit", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" }) : "—";
 }
 
+// The QR code is made on this phone from the ticket's secret (the same
+// TOTP the gate checks, scanner/totp.js), so it keeps changing with no
+// signal. The secret and the ticket's details are saved on the phone
+// (lib/offlineTickets.js) the first time they load.
 export default function TicketCredential() {
   const { ticketId } = useParams();
   const navigate = useNavigate();
-  const { roles } = useAuth();
+  const location = useLocation();
+  const { roles, user, isAuthed } = useAuth();
+  const userId = isAuthed ? user?.id : null;
 
   const [detail, setDetail] = useState(null);
+  const [secret, setSecret] = useState(null);
+  // When showing the copy saved on this phone (no connection): when it was saved.
+  const [offlineSince, setOfflineSince] = useState(null);
   const [payload, setPayload] = useState(null);
   const [secondsLeft, setSecondsLeft] = useState(ROTATION_S);
   const [error, setError] = useState(null);
+  const [codeError, setCodeError] = useState(null);
   const [showBrightness, setShowBrightness] = useState(false);
-  const tickRef = useRef(null);
 
   const active = detail?.status === "active";
+  const offline = offlineSince !== null;
 
-  const loadDetail = useCallback(
-    () => api.getTicketDetail(ticketId).then(setDetail).catch((err) => setError(err.message)),
-    [ticketId],
-  );
+  const showSaved = useCallback(() => {
+    const saved = savedTicket(userId, ticketId);
+    if (!saved) return false;
+    setDetail(saved.detail);
+    setSecret((current) => current || saved.secret);
+    setOfflineSince(saved.savedAt || "");
+    return true;
+  }, [userId, ticketId]);
 
-  const refreshPayload = useCallback(async () => {
+  const loadDetail = useCallback(async () => {
     try {
-      const seed = await api.getTicketSeed(ticketId);
-      setPayload(seed.qr_payload);
+      const d = await api.getTicketDetail(ticketId);
+      setDetail(d);
+      setOfflineSince(null);
+      setError(null);
+      saveTicket(userId, ticketId, { detail: d });
+      if (d.status !== "active") setSecret(null);
     } catch (err) {
+      if (err instanceof ApiError && err.status === 0) {
+        if (!showSaved()) {
+          setError("You're offline, and this ticket isn't saved on this phone yet. Open it once with a connection, and it will work offline after that.");
+        }
+        return;
+      }
+      if (err instanceof ApiError && err.status === 401 && !isAuthed) {
+        navigate(`/login?return=${encodeURIComponent(location.pathname)}`, { replace: true });
+        return;
+      }
+      if (err instanceof ApiError && (err.status === 404 || err.status === 403)) forgetTicket(userId, ticketId);
       setError(err.message);
     }
-  }, [ticketId]);
+  }, [ticketId, userId, isAuthed, showSaved, navigate, location.pathname]);
 
   useEffect(() => {
     loadDetail();
@@ -64,28 +95,83 @@ export default function TicketCredential() {
     if (!seen) setShowBrightness(true);
   }, [loadDetail]);
 
-  // The QR only exists for an unused, unlisted ticket.
+  // Back online: refresh what's shown (and the saved copy).
   useEffect(() => {
-    if (!active) return undefined;
-    refreshPayload();
-    tickRef.current = setInterval(() => {
-      setSecondsLeft((s) => {
-        if (s <= 1) {
-          refreshPayload();
-          return ROTATION_S;
+    window.addEventListener("online", loadDetail);
+    return () => window.removeEventListener("online", loadDetail);
+  }, [loadDetail]);
+
+  // Fetch the ticket's secret while online, and save it for offline use.
+  useEffect(() => {
+    if (!active || offline) return;
+    let cancelled = false;
+    api.getTicketSeed(ticketId)
+      .then((seed) => {
+        if (cancelled) return;
+        setSecret(seed.totp_secret);
+        setCodeError(null);
+        saveTicket(userId, ticketId, { secret: seed.totp_secret });
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        if (err instanceof ApiError && err.status === 0) {
+          // The connection dropped between the two calls: use the saved secret.
+          setSecret((current) => current || savedTicket(userId, ticketId)?.secret || null);
+        } else if (err instanceof ApiError && err.status === 400) {
+          // Used, or listed for resale, since the details loaded.
+          forgetTicketSecret(userId, ticketId);
+          setSecret(null);
+          loadDetail();
+        } else {
+          setCodeError(err.message);
         }
-        return s - 1;
       });
-    }, 1000);
-    return () => clearInterval(tickRef.current);
-  }, [active, refreshPayload]);
+    return () => { cancelled = true; };
+  }, [active, offline, ticketId, userId, loadDetail]);
+
+  // Make the code for each 30-second window, on the phone. The countdown
+  // follows the real windows the gate checks against.
+  useEffect(() => {
+    if (!active || !secret) {
+      setPayload(null);
+      return undefined;
+    }
+    let cancelled = false;
+    let lastWindow = null;
+    async function tick() {
+      const now = Math.floor(Date.now() / 1000);
+      setSecondsLeft(ROTATION_S - (now % ROTATION_S));
+      const step = Math.floor(now / ROTATION_S);
+      if (step === lastWindow) return;
+      lastWindow = step;
+      try {
+        // Mock mode has no real secrets: show the mock server's own code.
+        const next = usingMockBackend
+          ? (await api.getTicketSeed(ticketId)).qr_payload
+          : `TIKETI:${ticketId}:${await computeTotp(secret, now)}`;
+        if (!cancelled) {
+          setPayload(next);
+          setCodeError(null);
+        }
+      } catch {
+        lastWindow = null; // try again next second
+        if (!cancelled) setCodeError("This phone couldn't make the QR code. Update your browser and try again.");
+      }
+    }
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [active, secret, ticketId]);
 
   // Picks up the mint (and the on-chain record) without a reload.
   useEffect(() => {
-    if (!detail || detail.chain_status === "verified") return undefined;
+    if (!detail || offline || detail.chain_status === "verified") return undefined;
     const t = setTimeout(loadDetail, MINT_POLL_MS);
     return () => clearTimeout(t);
-  }, [detail, loadDetail]);
+  }, [detail, offline, loadDetail]);
 
   function dismissBrightness() {
     try { localStorage.setItem(BRIGHTNESS_DISMISSED_KEY, "1"); } catch { /* private mode */ }
@@ -120,10 +206,26 @@ export default function TicketCredential() {
           <p className="text-caption text-ink-tertiary mt-0.5">{formatEventDate(detail.event_date)}</p>
           {detail.gate_assignment && <p className="text-caption text-ink-secondary font-semibold mt-0.5">Enter via {detail.gate_assignment}</p>}
         </div>
-        {active && <Badge tone="verified" icon={<WifiOff size={11} />} className="flex-none">Works offline</Badge>}
+        {active && secret && (
+          offline
+            ? <Badge tone="info" icon={<WifiOff size={11} />} className="flex-none">Offline</Badge>
+            : <Badge tone="verified" icon={<WifiOff size={11} />} className="flex-none">Works offline</Badge>
+        )}
       </div>
 
-      {active ? (
+      {offline && (
+        <div role="status" className="rounded-md bg-info-bg text-info-on-tint px-3 py-2 text-caption">
+          You're offline. {active && secret ? "This code is made on your phone, so it still works at the gate. " : ""}
+          {offlineSince ? `Ticket details as of ${when(offlineSince)}.` : ""}
+        </div>
+      )}
+
+      {active && !secret && offline ? (
+        <div className="py-6 rounded-md bg-surface-inset text-center px-4 flex flex-col gap-1">
+          <p className="text-h3 text-ink-primary">QR code not saved on this phone</p>
+          <p className="text-body-sm text-ink-secondary">Connect to the internet and open this ticket once. After that, it works with no signal.</p>
+        </div>
+      ) : active ? (
         <div className="flex flex-col items-center gap-3 py-2">
           <div
             className="rounded-xl p-1"
@@ -134,7 +236,9 @@ export default function TicketCredential() {
           <CountdownRing secondsLeft={secondsLeft} totalSeconds={ROTATION_S} size={40} tone="brand">
             <span className="text-caption font-bold tabular-nums text-ink-primary">{secondsLeft}</span>
           </CountdownRing>
-          <p className="text-caption text-ink-tertiary text-center">Refreshes every 30 seconds — screenshots will not work.</p>
+          {codeError
+            ? <p role="alert" className="text-caption text-danger text-center">{codeError}</p>
+            : <p className="text-caption text-ink-tertiary text-center">Changes every 30 seconds, so screenshots won't work. Works without internet.</p>}
         </div>
       ) : (
         <StatusPanel detail={detail} />
@@ -147,11 +251,11 @@ export default function TicketCredential() {
         <DetailRow label="Seat" value={detail.seat_number || "General admission"} />
       </div>
 
-      {detail.payment && <PaymentCard ticketId={detail.ticket_id} payment={detail.payment} receiptEmail={detail.receipt_email} />}
+      {detail.payment && <PaymentCard ticketId={detail.ticket_id} payment={detail.payment} receiptEmail={offline ? null : detail.receipt_email} />}
 
-      <OnChainRecord ticketId={detail.ticket_id} detail={detail} />
+      {!offline && <OnChainRecord ticketId={detail.ticket_id} detail={detail} />}
 
-      {active && (
+      {active && !offline && (
         <div className="flex flex-col gap-2">
           <AddToCalendar event={detail} ticketId={detail.ticket_id} className="w-full" />
           <Button variant="secondary" iconLeft={<Repeat size={15} />} onClick={() => navigate(`/seller/sell?ticket=${detail.ticket_id}`)}>

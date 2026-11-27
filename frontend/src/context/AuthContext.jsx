@@ -1,6 +1,7 @@
 import { createContext, useContext, useState, useCallback, useEffect } from "react";
 import { api, usingMockBackend, setToken, clearToken, getToken } from "../api";
 import { getActiveOrgId, setActiveOrgId } from "../activeOrg";
+import { clearSavedTickets } from "../lib/offlineTickets";
 
 const AuthContext = createContext(null);
 
@@ -141,6 +142,7 @@ export function AuthProvider({ children }) {
 
   const logout = useCallback(() => {
     clearToken();
+    clearSavedTickets(); // tickets saved for offline use leave with the account
     localStorage.removeItem("tiketi_user");
     setActiveOrgId(null);
     setActiveOrgIdState(null);

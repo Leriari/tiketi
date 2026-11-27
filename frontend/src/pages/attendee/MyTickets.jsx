@@ -1,21 +1,70 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
 import { ShieldCheck } from "lucide-react";
-import { api } from "../../api";
-import { Tabs, Badge, EmptyState, Skeleton } from "../../components/ui";
+import { api, ApiError } from "../../api";
+import { useAuth } from "../../context/AuthContext";
+import { saveTicket, saveTicketList, savedTicketList } from "../../lib/offlineTickets";
+import { Tabs, Badge, EmptyState, ErrorState, Skeleton } from "../../components/ui";
 import { formatEventDate } from "../../format";
 import EventCover from "../../components/EventCover";
 
 const STATUS_TONE = { active: "success", used: "neutral", cancelled: "danger", resale: "warning", pending_payment: "warning" };
 const STATUS_LABEL = { active: "Active", used: "Used", cancelled: "Cancelled", resale: "Listed", pending_payment: "Awaiting payment" };
 
+// Upcoming tickets whose QR secret is saved here as the list loads, so
+// each one opens at the gate with no signal even if it was never opened.
+const MAX_SAVED_AHEAD = 20;
+
 export default function MyTickets() {
+  const navigate = useNavigate();
+  const { user, isAuthed } = useAuth();
+  const userId = isAuthed ? user?.id : null;
   const [tab, setTab] = useState("upcoming");
   const [tickets, setTickets] = useState(null);
+  const [savedAt, setSavedAt] = useState(null); // set while showing the copy saved on this phone
+  const [error, setError] = useState(null);
+
+  const load = useCallback(() => {
+    setError(null);
+    api.myTickets()
+      .then((rows) => {
+        setTickets(rows);
+        setSavedAt(null);
+        saveTicketList(userId, rows);
+        const now = Date.now();
+        rows
+          .filter((t) => t.status === "active" && t.event_date && new Date(t.event_date).getTime() >= now)
+          .slice(0, MAX_SAVED_AHEAD)
+          .forEach((t) => {
+            api.getTicketSeed(t.id)
+              .then((seed) => saveTicket(userId, t.id, { secret: seed.totp_secret }))
+              .catch(() => { /* opening the ticket fetches it again */ });
+          });
+      })
+      .catch((err) => {
+        if (err instanceof ApiError && err.status === 0) {
+          const saved = savedTicketList(userId);
+          if (saved) {
+            setTickets(saved.tickets);
+            setSavedAt(saved.savedAt);
+            return;
+          }
+          setError("You're offline, and no tickets are saved on this phone yet. Connect once to save them.");
+          return;
+        }
+        if (err instanceof ApiError && err.status === 401 && !isAuthed) {
+          navigate("/login?return=%2Ftickets", { replace: true });
+          return;
+        }
+        setError(err instanceof ApiError ? err.message : "Couldn't load your tickets.");
+      });
+  }, [userId, isAuthed, navigate]);
 
   useEffect(() => {
-    api.myTickets().then(setTickets);
-  }, []);
+    load();
+    window.addEventListener("online", load);
+    return () => window.removeEventListener("online", load);
+  }, [load]);
 
   // Each ticket carries its own event details, so tickets for past or
   // unlisted events show up too (the public event list leaves those out).
@@ -43,6 +92,16 @@ export default function MyTickets() {
     <div className="mx-auto max-w-3xl px-4 py-6 flex flex-col gap-4">
       <h1 className="text-h1 text-ink-primary">My tickets</h1>
 
+      {savedAt && (
+        <div role="status" className="rounded-md bg-info-bg text-info-on-tint px-3 py-2 text-caption">
+          You're offline. Showing the tickets saved on this phone
+          {" "}({new Date(savedAt).toLocaleString("en-KE", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" })}).
+          Their QR codes still work at the gate.
+        </div>
+      )}
+
+      {error && <ErrorState description={error} onRetry={load} />}
+
       <Tabs
         items={[
           { value: "upcoming", label: "Upcoming", count: grouped?.upcoming.length },
@@ -54,7 +113,7 @@ export default function MyTickets() {
         className="max-w-md"
       />
 
-      {tickets === null && (
+      {tickets === null && !error && (
         <div className="flex flex-col gap-3">
           {Array.from({ length: 2 }).map((_, i) => (
             <Skeleton key={i} className="h-24 w-full rounded-md" />

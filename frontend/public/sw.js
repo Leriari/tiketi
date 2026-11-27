@@ -1,5 +1,6 @@
-// Work Order 05 B4 — the Scanner PWA's service worker. App-shell caching
-// only, so the surface is installable and *launches* with no
+// Work Order 05 B4 — the app-shell service worker. App-shell caching
+// only, so the scanner and the attendee app (whose ticket screen has to
+// work at a gate with no signal) are installable and *launch* with no
 // connectivity. It must never intercept anything in or near the
 // validation path, which the project's central claim depends on making
 // zero network calls at all (see docs/offline-validation.md and
@@ -7,13 +8,13 @@
 // service worker to even help with there, only something it could break
 // by getting in the way.
 //
-// Registered only from ScannerShell.jsx, not app-wide — see that file for
-// why.
-const CACHE_NAME = "tiketi-scanner-shell-v2";
-const APP_SHELL_PATHS = ["/", "/scanner", "/manifest.webmanifest", "/favicon.svg"];
+// Registered from ScannerShell.jsx and AttendeeShell.jsx (lib/offlineShell.js).
+const CACHE_NAME = "tiketi-app-shell-v3";
+const APP_SHELL_PATHS = ["/", "/scanner", "/tickets", "/manifest.webmanifest", "/favicon.svg"];
 // What a page load with no connection gets: the app's index.html (every
-// route serves the same one), so /scanner/scan opens offline too.
-const OFFLINE_PAGE = "/scanner";
+// route serves the same one), so /scanner/scan or /tickets/<id> opens
+// offline too.
+const OFFLINE_PAGE = "/";
 // The page fetches its scripts with an Origin header (module scripts are
 // CORS requests) and servers answer with "Vary: Origin", so a strict
 // lookup misses the copies cached without one.

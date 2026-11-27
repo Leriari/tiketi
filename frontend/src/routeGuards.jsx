@@ -13,6 +13,7 @@ import { Navigate, Outlet, useLocation } from "react-router-dom";
 import { usingMockBackend } from "./api";
 import { useAuth } from "./context/AuthContext";
 import { getDeviceToken } from "./scanner/deviceAuth";
+import { hasSavedTickets } from "./lib/offlineTickets";
 
 function Unauthorised({ message }) {
   const location = useLocation();
@@ -36,6 +37,18 @@ export function RequireAuth() {
   if (usingMockBackend) return <Outlet />;
   if (!isAuthed) return <RequireLogin returnPath={location.pathname + location.search} />;
   return <Outlet />;
+}
+
+// My Tickets and the ticket screen: signed in, or tickets saved on this
+// phone while offline. A session lasts an hour, and the gate may have no
+// signal to sign in again, so a saved ticket still opens (offline only:
+// with a connection, signing in again is the way back).
+export function RequireAuthOrSavedTickets() {
+  const { isAuthed } = useAuth();
+  const location = useLocation();
+  if (usingMockBackend || isAuthed) return <Outlet />;
+  if (!navigator.onLine && hasSavedTickets()) return <Outlet />;
+  return <RequireLogin returnPath={location.pathname + location.search} />;
 }
 
 export function RequireOrgMembership() {
