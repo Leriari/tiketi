@@ -229,7 +229,10 @@ export default function Login({ mode = "login" }) {
 
   // No SMS on this server: Google is the main way in; phone codes are only
   // for the configured demo numbers.
-  const googleFirst = Boolean(firebaseConfig) && phoneLogin === "demo_numbers" && !googleLink;
+  const googleFirst = Boolean(firebaseConfig) && (phoneLogin === "demo_numbers" || phoneLogin === "off") && !googleLink;
+  // No SMS and no demo numbers: Google is the only way in (the phone step
+  // still follows a first Google sign-in, to record the M-Pesa number).
+  const googleOnly = googleFirst && phoneLogin === "off";
 
   // Already logged in (e.g. opened /login directly, or pressed Back after
   // logging in) — nothing to do here. Not applied mid-submit: completeAuth
@@ -265,9 +268,11 @@ export default function Login({ mode = "login" }) {
             Continue with Google
           </Button>
           {googleError && <p role="alert" className="text-caption text-danger text-center">{googleError}</p>}
-          <div className="flex items-center gap-3 text-caption text-ink-tertiary pt-3">
-            <span className="h-px flex-1 bg-line-subtle" /> demo accounts <span className="h-px flex-1 bg-line-subtle" />
-          </div>
+          {!googleOnly && (
+            <div className="flex items-center gap-3 text-caption text-ink-tertiary pt-3">
+              <span className="h-px flex-1 bg-line-subtle" /> demo accounts <span className="h-px flex-1 bg-line-subtle" />
+            </div>
+          )}
         </div>
       )}
 
@@ -287,7 +292,7 @@ export default function Login({ mode = "login" }) {
         </div>
       )}
 
-      {step === "phone" && (
+      {step === "phone" && !googleOnly && (
         <form onSubmit={sendCode} className="flex flex-col gap-4">
           <Input
             label={googleLink && googlePhoneMode === "unverified" ? "M-Pesa number" : "Phone number"}

@@ -40,6 +40,13 @@ def test_health_tells_the_login_screen_what_works():
     assert h["simulated_payments"] is False
 
 
+def test_without_demo_numbers_login_is_google_only(monkeypatch):
+    monkeypatch.setattr(auth_routes.settings, "DEMO_PHONE_CODES", "")
+    assert client.get("/").json()["phone_login"] == "off"
+    res = client.post(f"{API}/auth/request-otp", json={"phone_number": "0766500001"})
+    assert res.status_code == 400 and "Continue with Google" in res.json()["detail"]
+
+
 def test_demo_number_signs_in_with_its_fixed_code_and_no_code_leaks():
     res = client.post(f"{API}/auth/request-otp", json={"phone_number": "0766500001"})
     assert res.status_code == 200 and "dev_otp" not in res.json()

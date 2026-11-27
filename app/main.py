@@ -83,9 +83,14 @@ def health_check(db: Session = Depends(get_db)):
         "service": "TiketiKE API",
         "version": "1.0.0",
         "env": settings.APP_ENV,
-        # What the login screen should offer: "otp" (codes are delivered) or
-        # "demo_numbers" (no SMS — only configured demo numbers have codes).
-        "phone_login": "demo_numbers" if settings.OTP_DELIVERY_CHANNEL == "disabled" else "otp",
+        # What the login screen should offer: "otp" (codes are delivered),
+        # "demo_numbers" (no SMS — only configured demo numbers have codes) or
+        # "off" (no SMS and no demo numbers: Google sign-in only).
+        "phone_login": (
+            "otp" if settings.OTP_DELIVERY_CHANNEL != "disabled"
+            else "demo_numbers" if settings.demo_phone_codes
+            else "off"
+        ),
         "google_phone_confirmation": settings.GOOGLE_PHONE_CONFIRMATION,
         # Allowed by this server (ALLOW_SIMULATED_PAYMENTS) and not switched
         # off by an admin (Feature Flags).
