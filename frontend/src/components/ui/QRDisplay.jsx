@@ -4,7 +4,7 @@ import { cn } from "../../lib/cn";
 import Skeleton from "./Skeleton";
 
 /** Generates a QR client-side from `value`. Spec: minimum 240px. */
-export default function QRDisplay({ value, size = 240, className }) {
+export default function QRDisplay({ value, size = 240, className, alt = "Ticket QR code" }) {
   const [url, setUrl] = useState(null);
 
   useEffect(() => {
@@ -24,7 +24,7 @@ export default function QRDisplay({ value, size = 240, className }) {
       style={{ width: size + 24, height: size + 24 }}
     >
       {url ? (
-        <img src={url} alt="Ticket QR code" width={size} height={size} style={{ width: size, height: size }} />
+        <img src={url} alt={alt} width={size} height={size} style={{ width: size, height: size }} />
       ) : (
         <Skeleton style={{ width: size, height: size }} />
       )}

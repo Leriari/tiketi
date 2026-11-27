@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { ScanLine, HardDrive, Clock, CalendarRange, KeyRound, Smartphone } from "lucide-react";
 import { api, ApiError } from "../../api";
 import { useToast } from "../../components/ui/Toast";
@@ -23,8 +23,10 @@ const BYTES_PER_CREDENTIAL_ESTIMATE = 160;
 export default function Sync() {
   const navigate = useNavigate();
   const toast = useToast();
+  const [params, setParams] = useSearchParams();
   const [device, setDevice] = useState(() => getDeviceInfo());
-  const [enrollCode, setEnrollCode] = useState("");
+  // Opened from Scanner Hub's enrolment QR (/scanner?code=…): the code is filled in.
+  const [enrollCode, setEnrollCode] = useState(() => (params.get("code") || "").toUpperCase());
   const [enrolling, setEnrolling] = useState(false);
   const [enrollError, setEnrollError] = useState(null);
   const [progress, setProgress] = useState(0);
@@ -74,6 +76,7 @@ export default function Sync() {
       });
       setDevice(info);
       setPhase("ready");
+      if (params.has("code")) setParams({}, { replace: true }); // used up: keep it out of history
     } catch (err) {
       setEnrollError(err instanceof ApiError ? err.message : "Enrolment failed. Check the code and try again.");
     } finally {
@@ -152,7 +155,9 @@ export default function Sync() {
           <div className="rounded-md border border-line-default bg-surface p-4 flex items-center gap-3">
             <Smartphone size={18} className="text-ink-tertiary flex-none" />
             <p className="text-body-sm text-ink-secondary">
-              An organiser registers this device for one event and gate, then gives you a code to enter here.
+              {enrollCode && params.get("code")
+                ? "Your enrolment code is filled in. Tap Enrol this device."
+                : "An organiser adds this device in Scanner Hub for one event and gate, then gives you a QR to scan or a code to enter here."}
             </p>
           </div>
           <Input

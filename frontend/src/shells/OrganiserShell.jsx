@@ -1,7 +1,7 @@
 import {
   LayoutDashboard, TrendingUp, FileBarChart, Megaphone, Ticket, Search, CalendarPlus, Users2,
   Link2, ScanLine, QrCode, ListChecks, FileCheck2, BarChart3, UserCheck, FolderOutput,
-  Building2, Banknote, UsersRound,
+  Building2, Banknote, UsersRound, Smartphone,
 } from "lucide-react";
 import { ThemeProvider } from "../theme/ThemeProvider";
 import { usingMockBackend } from "../api";
@@ -24,11 +24,12 @@ const NAV_GROUPS = [
     ],
   },
   {
-    label: "Membership & VIP",
-    badge: "VIP",
+    label: "Gates & Guests",
     items: [
       { to: "/organiser/scanners", label: "QR Scanner Hub", icon: QrCode },
       { to: "/organiser/scan", label: "Live QR Scanner", icon: ScanLine },
+      // The offline gate-phone app (enrol, sync, scan): outside the console.
+      { to: "/scanner", label: "Gate Scanner App", icon: Smartphone },
       { to: "/organiser/guests", label: "Guest Lists", icon: ListChecks },
     ],
   },
