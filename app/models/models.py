@@ -425,6 +425,9 @@ class EventTier(Base):
     sales_start: Mapped[datetime | None] = mapped_column(DateTime)
     sales_end: Mapped[datetime | None] = mapped_column(DateTime)
     sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Gate this tier's tickets must use (e.g. VIP -> "VIP Entrance"), or null
+    # for "any gate" (balanced). See app/services/gates.py.
+    gate_name: Mapped[str | None] = mapped_column(String(100))
 
     event: Mapped["Event"] = relationship("Event", back_populates="tiers")
     tickets: Mapped[list["Ticket"]] = relationship("Ticket", back_populates="tier")
@@ -445,6 +448,9 @@ class Ticket(Base):
     # Which gate device checked this ticket in, if any — populated once GateScanner
     # registration exists (Phase 2); left null in Phase 1.
     gate_scanner_id: Mapped[str | None] = mapped_column(ForeignKey("gate_scanners.id"))
+    # The gate this ticket enters by, chosen when it was created (one of
+    # Event.gates' names) — see app/services/gates.py. Shown to the attendee.
+    gate_name: Mapped[str | None] = mapped_column(String(100))
     # Set only for the 2nd+ ticket in a quantity>1 purchase — the 1st ticket is
     # still linked the original way, via Payment.ticket_id. Lets one payment
     # activate/mint every ticket it covers, not just the first.

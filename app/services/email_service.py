@@ -115,7 +115,7 @@ FOOTER = ("You're receiving this because you bought or were sent a ticket on Cha
 def purchase_receipt(*, name: str | None, order_ref: str, event_title: str, event_date: datetime | None,
                      venue: str, tier_name: str, quantity: int, amount_kes: float, mpesa_receipt: str | None,
                      card: str | None = None, wallet: bool = False, paid_at: datetime | None, phone: str, resale: bool,
-                     tickets_url: str) -> tuple[str, str, str]:
+                     tickets_url: str, gate: str | None = None) -> tuple[str, str, str]:
     """(subject, text, html) for a confirmed payment."""
     if wallet:
         paid_rows = [("Paid from", "Your ChainTix wallet")]
@@ -133,6 +133,7 @@ def purchase_receipt(*, name: str | None, order_ref: str, event_title: str, even
         ("Event", event_title),
         ("When", nairobi_time(event_date)),
         ("Where", venue),
+        *([("Enter by", gate)] if gate else []),
         ("Ticket", f"{quantity} × {tier_name}{' (resale)' if resale else ''}"),
         ("Total paid", kes(amount_kes)),
         *paid_rows,

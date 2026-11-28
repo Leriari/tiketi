@@ -72,6 +72,17 @@ export async function validate(rawPayload, { gateName } = {}) {
     };
   }
 
+  // Another gate's ticket: synced without its secret, only so this gate can
+  // send the holder to the right one. Only that gate can admit it.
+  if (!credential.totp_secret) {
+    return {
+      granted: false,
+      reasonCode: REASON.WRONG_GATE,
+      reason: credential.gate_assignment ? `Wrong gate: send them to ${credential.gate_assignment}` : "Ticket not for this gate",
+      ticketId: parsed.ticketId,
+    };
+  }
+
   // 2. TOTP window.
   const otpValid = await verifyTotp(credential.totp_secret, parsed.otp);
   if (!otpValid) {
@@ -99,15 +110,14 @@ export async function validate(rawPayload, { gateName } = {}) {
     };
   }
 
-  // 4. Gate assignment. credential.gate_assignment is always null today —
-  // no per-ticket assignment exists in the real schema yet (see
-  // docs/offline-validation.md) — so this check currently always passes.
-  // Wired now so it activates for free once that data exists.
+  // 4. Gate assignment: each ticket has one gate, stored at purchase
+  // (app/services/gates.py). A ticket for another gate normally stops above
+  // (no secret); this catches one synced for this device before a gate change.
   if (gateName && credential.gate_assignment && credential.gate_assignment !== gateName) {
     return {
       granted: false,
       reasonCode: REASON.WRONG_GATE,
-      reason: `Wrong gate — this ticket is for ${credential.gate_assignment}`,
+      reason: `Wrong gate: send them to ${credential.gate_assignment}`,
       ticketId: parsed.ticketId,
     };
   }

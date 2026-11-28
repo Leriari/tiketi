@@ -356,6 +356,7 @@ def send_payment_receipt(self, payment_id: str, force: bool = False):
             mpesa_receipt=payment.mpesa_receipt_number,
             card=payment.paid_with if payment.method == "card" else None,
             wallet=payment.method == "wallet",
+            gate=ticket.gate_name if ticket else None,  # one gate per order (payments.purchase)
             paid_at=payment.confirmed_at,
             phone=_local_phone(payment.phone_number or user.phone_number),
             resale=bool(transfer),

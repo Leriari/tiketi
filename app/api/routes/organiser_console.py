@@ -38,7 +38,7 @@ from app.schemas.schemas import (
 from app.services import organiser_service
 from app.services import payouts as payout_service
 from app.services.auth_service import get_or_create_user
-from app.services.gate_partitioning import assign_gate
+from app.services import gates as gate_service
 from app.core.constants import PAYOUT_CHARGE_BANDS
 from app.services.platform_settings import DEFAULT_FEES, FeeHistory, current_fees
 from app.services.totp_service import generate_totp_secret
@@ -110,17 +110,6 @@ def _tickets(db: Session, event_ids: list[str]) -> list[Ticket]:
     if not event_ids:
         return []
     return db.query(Ticket).filter(Ticket.event_id.in_(event_ids)).all()
-
-
-def _gate_names(db: Session, event: Event) -> list[str]:
-    """Sorted names of the gates with a registered device — exactly the list
-    /gate/sync-event partitions tickets over."""
-    names = {
-        s.gate_name
-        for s in db.query(GateScanner).filter(GateScanner.event_id == event.id).all()
-        if s.gate_name
-    }
-    return sorted(names)
 
 
 def _primary_payments(db: Session, event_ids: list[str]) -> list[Payment]:
@@ -229,7 +218,7 @@ def _scanner_status(s: GateScanner) -> str:
     return "revoked"
 
 
-def _ticket_row(db: Session, ticket: Ticket, gate_lists: dict[str, list[str]]) -> dict:
+def _ticket_row(db: Session, ticket: Ticket) -> dict:
     event = ticket.event
     attendance = db.query(Attendance).filter(Attendance.ticket_id == ticket.id).all()
     transfers = db.query(Transfer).filter(Transfer.ticket_id == ticket.id).order_by(Transfer.created_at).all()
@@ -272,7 +261,6 @@ def _ticket_row(db: Session, ticket: Ticket, gate_lists: dict[str, list[str]]) -
     if len(resold) >= 2:
         suspicious.append(f"Resold {len(resold)} times")
 
-    gates = gate_lists.get(ticket.event_id) or []
     return {
         "ticket_id": ticket.id,
         "event_id": ticket.event_id,
@@ -284,16 +272,12 @@ def _ticket_row(db: Session, ticket: Ticket, gate_lists: dict[str, list[str]]) -
         "purchased_at": _iso(_naive(ticket.purchased_at)),
         "nft_token_id": ticket.nft_token_id,
         "chain_status": "verified" if ticket.nft_token_id else "pending",
-        "gate_assignment": assign_gate(ticket.id, gates) if gates else None,
+        "gate_assignment": ticket.gate_name,
         "checked_in": ticket.status == TicketStatus.USED or bool(admitted_rows),
         "is_complimentary": bool(ticket.is_complimentary),
         "timeline": timeline,
         "suspicious": suspicious,
     }
-
-
-def _gate_lists(db: Session, events: list[Event]) -> dict[str, list[str]]:
-    return {e.id: _gate_names(db, e) for e in events}
 
 
 # ── Events ──────────────────────────────────────────────────────────────────
@@ -384,6 +368,7 @@ def send_complimentary_ticket(
     )
     db.add(ticket)
     db.flush()
+    gate_service.assign(db, ticket, event, tier)
     db.add(Barcode(
         ticket_id=ticket.id, event_id=event.id, owner_id=recipient.id,
         token=encrypt_secret(generate_totp_secret()), token_version=1, status=BarcodeStatus.ACTIVE,
@@ -587,8 +572,7 @@ def ticket_central(
         needle = query.strip().lower()
         titles = {e.id: e.title.lower() for e in events}
         tickets = [t for t in tickets if needle in t.id.lower() or needle in titles.get(t.event_id, "")]
-    gate_lists = _gate_lists(db, events)
-    return [_ticket_row(db, t, gate_lists) for t in tickets]
+    return [_ticket_row(db, t) for t in tickets]
 
 
 @router.get("/audit-lookup")
@@ -623,8 +607,7 @@ def audit_lookup(organization_id: str, q: str = "", _m: OrganizerMember = Depend
         ):
             matches[t.id] = t
 
-    gate_lists = _gate_lists(db, events)
-    return [_ticket_row(db, t, gate_lists) for t in matches.values()]
+    return [_ticket_row(db, t) for t in matches.values()]
 
 
 # ── Crowd control & scanners ────────────────────────────────────────────────
@@ -655,11 +638,10 @@ def crowd_control(organization_id: str, event_id: str, _m: OrganizerMember = Dep
         row = by_gate.setdefault("Manual / online", {"gate": "Manual / online", "admitted": 0, "denied": 0})
         row["admitted"] += online_only
 
-    gate_names = _gate_names(db, event)
     assigned: dict[str, int] = defaultdict(int)
-    if gate_names:
-        for t in held:
-            assigned[assign_gate(t.id, gate_names)] += 1
+    for t in held:
+        if t.gate_name:
+            assigned[t.gate_name] += 1
     gates = []
     for g in (event.gates or []):
         devices = [s for s in scanners.values() if s.gate_name == g["name"]]
@@ -804,10 +786,9 @@ def scanner_devices(organization_id: str, _m: OrganizerMember = Depends(read_acc
         scans = db.query(Attendance).filter(Attendance.scanner_id == s.id).all()
         cached = 0
         if event and s.status == GateScannerStatus.ACTIVE:
-            names = _gate_names(db, event)
             cached = sum(
                 1 for t in _tickets(db, [event.id])
-                if t.status in _HELD_STATUSES and assign_gate(t.id, names) == s.gate_name
+                if t.status in _HELD_STATUSES and t.gate_name == s.gate_name
             )
         state = _scanner_status(s)
         out.append({

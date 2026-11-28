@@ -120,6 +120,8 @@ class TierIn(BaseModel):
     visibility: str = "public"
     salesStart: Optional[datetime] = None
     salesEnd: Optional[datetime] = None
+    # Gate this tier must enter by, by name; empty = any gate (balanced).
+    gate: Optional[str] = None
 
     @field_validator("perOrderMax", "salesStart", "salesEnd", mode="before")
     @classmethod
@@ -284,6 +286,7 @@ class TicketOut(BaseModel):
     category: Optional[str] = None
     image_url: Optional[str] = None
     tier_name: Optional[str] = None
+    gate_name: Optional[str] = None  # the gate to enter by (app/services/gates.py)
     # Note: totp_secret is NEVER returned via API — only via the secure ticket app
 
     model_config = {"from_attributes": True}

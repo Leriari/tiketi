@@ -29,7 +29,7 @@ from app.models.models import (
 from app.core.dependencies import get_current_user
 from app.core.authz import check_org_role, get_current_scanner, hash_token, generate_token
 from app.core.config import get_settings
-from app.services.gate_partitioning import assign_gate
+from app.services import gates as gate_service
 from app.worker import mark_ticket_used_onchain
 from app.schemas.schemas import (
     ScannerRegisterRequest, ScannerRegisterResponse, ScannerEnrollRequest, ScannerEnrollResponse,
@@ -184,14 +184,11 @@ def sync_event_tickets(
     B4), not a user JWT. The path's event_id must match the event this
     device was enrolled for.
 
-    Gate partitioning (Work Order 05 B1): each ticket is deterministically
-    assigned to exactly one of the event's currently-registered gates (a
-    stable hash of ticket_id, modulo the sorted gate list —
-    app/services/gate_partitioning.py) — this device only receives the
-    tickets assigned to *its own* gate, so two offline gates can no longer
-    both admit the same ticket. See that module's docstring for the one
-    real limitation: the assignment reshuffles if the event's gate set
-    changes after a device has already synced.
+    Gates: each ticket has one gate, stored when it was bought
+    (app/services/gates.py). This device receives the secrets of its own
+    gate's tickets only, so two offline gates can't both admit the same
+    ticket. Other gates' tickets come without a secret, so the scanner can
+    send their holders to the right gate.
     """
     if scanner.event_id != event_id:
         raise HTTPException(status_code=403, detail="This device is not enrolled for this event")
@@ -203,12 +200,9 @@ def sync_event_tickets(
     now = datetime.now(timezone.utc)
     scanner.last_sync_at = now
 
-    gate_names = sorted({
-        name for (name,) in db.query(GateScanner.gate_name)
-        .filter(GateScanner.event_id == event_id, GateScanner.status == GateScannerStatus.ACTIVE)
-        .distinct()
-    })
-
+    # Tickets carry the gate they were given at purchase (app/services/
+    # gates.py); fill in any that don't have one yet before handing out.
+    gate_service.reconcile_event(db, event)
     tickets = (
         db.query(Ticket)
         .filter(
@@ -217,8 +211,10 @@ def sync_event_tickets(
         )
         .all()
     )
-    my_tickets = [t for t in tickets if assign_gate(t.id, gate_names) == scanner.gate_name]
-
+    my_tickets = [t for t in tickets if t.gate_name == scanner.gate_name]
+    # Other gates' tickets travel without their secret, only so the scanner
+    # can say which gate to go to instead of "ticket not found".
+    elsewhere = [t for t in tickets if t.gate_name and t.gate_name != scanner.gate_name]
     db.add(AuditLog(
         actor_id=scanner.account_id,
         action_type="gate_sync",
@@ -241,11 +237,21 @@ def sync_event_tickets(
                 "id": t.id,
                 "tier_name": t.tier.tier_name if t.tier else None,
                 "seat_number": t.seat_number,
-                "gate_assignment": scanner.gate_name,
+                "gate_assignment": t.gate_name,
                 "totp_secret": t.totp_secret,
                 "status": t.status.value,
             }
             for t in my_tickets
+        ] + [
+            {
+                "id": t.id,
+                "tier_name": t.tier.tier_name if t.tier else None,
+                "seat_number": t.seat_number,
+                "gate_assignment": t.gate_name,
+                "totp_secret": None,
+                "status": t.status.value,
+            }
+            for t in elsewhere
         ],
     }
 
@@ -283,7 +289,7 @@ def upload_scan_batch(
     upload must not create duplicate Attendance rows. An ADMITTED scan is
     idempotent only against *this same scanner* re-uploading the same
     ticket — if a *different* scanner already admitted this ticket (two
-    gates offline at once, see gate_partitioning.py's limitation, or a
+    gates offline at once, e.g. a device synced before a gate change, or a
     gate mis-assignment), that is reported back as a conflict, not
     silently resolved or overwritten. A DENIED scan is deduplicated
     against an identical prior row from the same scanner.

@@ -1,5 +1,6 @@
 """
-Work Order 05 B1 (gate partitioning) + B5 (scan reconciliation) tests.
+Gates (each ticket's gate, stored at purchase: app/services/gates.py) and
+Work Order 05 B5 (scan reconciliation) tests.
 
 Reuses test_api.py's TestClient/DB setup, same reasoning as the other
 cross-file test modules in this suite.
@@ -66,69 +67,157 @@ def _register_and_enroll(headers: dict, event_id: str, device_id: str, gate_name
     return res.json()["device_token"]
 
 
-# ── B1: gate partitioning ────────────────────────────────────────────────────
+# ── B1: gates — each ticket gets one gate, stored at purchase ────────────────
 
-def test_two_gates_partition_tickets_with_no_overlap():
+def _create_gated_event(headers: dict, gates: list[str], vip_gate: str | None = None) -> dict:
+    org = client.post("/api/v1/organisations/", json={"business_name": "Gate Test Org"}, headers=headers).json()
+    res = client.post("/api/v1/events/", json={
+        "organization_id": org["id"], "title": "Gate Test Event", "venue": "Test Venue",
+        "event_date": "2027-05-01T18:00:00", "status": "live",
+        "gates": [{"name": g} for g in gates],
+        "tiers": [
+            {"name": "General", "price": 150, "capacity": 100, "visibility": "public"},
+            {"name": "VIP", "price": 900, "capacity": 20, "visibility": "public", "gate": vip_gate},
+        ],
+    }, headers=headers)
+    assert res.status_code == 201, res.text
+    # The organiser console's view: it carries the gates and the full tier rows.
+    console = client.get(f"/api/v1/organisations/{org['id']}/events/{res.json()['id']}", headers=headers)
+    assert console.status_code == 200, console.text
+    return console.json()
+
+
+def _buy_tier(headers: dict, event: dict, tier_name: str, phone: str) -> str:
+    tier = next(t for t in event["tiers"] if t["name"] == tier_name)
+    res = client.post("/api/v1/payments/purchase", json={"event_id": event["id"], "tier_id": tier["id"], "phone_number": phone}, headers=headers)
+    assert res.status_code == 201, res.text
+    assert client.post(f"/api/v1/payments/{res.json()['payment_id']}/dev-confirm", headers=headers).status_code == 200
+    return res.json()["ticket_id"]
+
+
+def _sync(token: str, event_id: str) -> dict:
+    res = client.get(f"/api/v1/gate/sync-event/{event_id}", headers={"Authorization": f"Bearer {token}"})
+    assert res.status_code == 200, res.text
+    return res.json()
+
+
+def _own(sync: dict) -> set[str]:
+    """The tickets this gate can admit: the ones it got secrets for."""
+    return {t["id"] for t in sync["tickets"] if t["totp_secret"]}
+
+
+def _gate_of(headers: dict, ticket_id: str) -> str | None:
+    return client.get(f"/api/v1/tickets/{ticket_id}/detail", headers=headers).json()["gate_assignment"]
+
+
+def test_tickets_are_spread_evenly_and_each_gate_gets_only_its_own():
     headers = _login("0799222001")
-    event = _create_org_and_event(headers, capacity=50)
+    event = _create_gated_event(headers, ["Gate A", "Gate B"])
+    ticket_ids = [_buy_tier(headers, event, "General", "0799222001") for _ in range(10)]
 
-    ticket_ids = [_buy_ticket(headers, event["id"], "0799222001") for _ in range(20)]
+    gates = [_gate_of(headers, t) for t in ticket_ids]
+    assert gates.count("Gate A") == 5 and gates.count("Gate B") == 5  # least-used gate each time
 
-    token_a = _register_and_enroll(headers, event["id"], "device-gate-a", "Gate A")
-    token_b = _register_and_enroll(headers, event["id"], "device-gate-b", "Gate B")
-
-    sync_a = client.get(f"/api/v1/gate/sync-event/{event['id']}", headers={"Authorization": f"Bearer {token_a}"}).json()
-    sync_b = client.get(f"/api/v1/gate/sync-event/{event['id']}", headers={"Authorization": f"Bearer {token_b}"}).json()
-
-    ids_a = {t["id"] for t in sync_a["tickets"]}
-    ids_b = {t["id"] for t in sync_b["tickets"]}
-
-    # No overlap — the central claim of partitioning.
-    assert ids_a.isdisjoint(ids_b)
-    # Every ticket went somewhere — the union covers all of them.
-    assert ids_a | ids_b == set(ticket_ids)
-    # Both gates got at least one ticket with 20 tickets split 2 ways —
-    # not a strict guarantee of the hash, but exceedingly likely, and a
-    # real smoke test that the split isn't degenerate (e.g. everything on
-    # one gate).
-    assert len(ids_a) > 0 and len(ids_b) > 0
-
-    for t in sync_a["tickets"]:
-        assert t["gate_assignment"] == "Gate A"
-    for t in sync_b["tickets"]:
-        assert t["gate_assignment"] == "Gate B"
+    sync_a = _sync(_register_and_enroll(headers, event["id"], "device-gate-a", "Gate A"), event["id"])
+    sync_b = _sync(_register_and_enroll(headers, event["id"], "device-gate-b", "Gate B"), event["id"])
+    assert _own(sync_a).isdisjoint(_own(sync_b))
+    assert _own(sync_a) | _own(sync_b) == set(ticket_ids)
+    assert sync_a["ticket_count"] == 5
+    # Gate A's phone also knows Gate B's tickets, without their secret, so it can redirect.
+    others = [t for t in sync_a["tickets"] if not t["totp_secret"]]
+    assert {t["id"] for t in others} == _own(sync_b)
+    assert all(t["gate_assignment"] == "Gate B" for t in others)
 
 
-def test_single_gate_still_gets_every_ticket():
-    """With only one gate registered, partitioning degenerates to the old
-    device-level-only behaviour — every ticket assigned to the one gate
-    that exists."""
+def test_a_tier_tied_to_a_gate_goes_there_and_that_gate_is_kept_for_it():
     headers = _login("0799222002")
-    event = _create_org_and_event(headers, capacity=10)
-    ticket_ids = [_buy_ticket(headers, event["id"], "0799222002") for _ in range(5)]
+    event = _create_gated_event(headers, ["Gate A", "Gate B", "VIP Entrance"], vip_gate="VIP Entrance")
+    vip = [_buy_tier(headers, event, "VIP", "0799222002") for _ in range(2)]
+    general = [_buy_tier(headers, event, "General", "0799222002") for _ in range(4)]
+    assert {_gate_of(headers, t) for t in vip} == {"VIP Entrance"}
+    assert sorted(_gate_of(headers, t) for t in general) == ["Gate A", "Gate A", "Gate B", "Gate B"]
 
-    token = _register_and_enroll(headers, event["id"], "device-single", "Only Gate")
-    sync = client.get(f"/api/v1/gate/sync-event/{event['id']}", headers={"Authorization": f"Bearer {token}"}).json()
 
-    assert {t["id"] for t in sync["tickets"]} == set(ticket_ids)
+def test_the_gate_is_fixed_and_shown_before_any_scanner_exists():
+    headers = _login("0799222003")
+    event = _create_gated_event(headers, ["North", "South"])
+    ticket_id = _buy_tier(headers, event, "General", "0799222003")
+    assert _gate_of(headers, ticket_id) == "North"
+    mine = client.get("/api/v1/tickets/my", headers=headers).json()
+    assert next(t for t in mine if t["id"] == ticket_id)["gate_name"] == "North"
+
+    # Adding scanner phones (even at a new gate) doesn't move anyone.
+    _register_and_enroll(headers, event["id"], "device-north", "North")
+    _register_and_enroll(headers, event["id"], "device-east", "East")
+    assert _gate_of(headers, ticket_id) == "North"
+
+
+def test_renaming_a_gate_keeps_its_tickets_and_removing_one_moves_them():
+    headers = _login("0799222004")
+    event = _create_gated_event(headers, ["Gate A", "Gate B"])
+    ticket_ids = [_buy_tier(headers, event, "General", "0799222004") for _ in range(4)]
+    on_b = [t for t in ticket_ids if _gate_of(headers, t) == "Gate B"]
+    token_b = _register_and_enroll(headers, event["id"], "device-rename-b", "Gate B")
+
+    gates = event["gates"]
+    renamed = [gates[0], {"id": gates[1]["id"], "name": "Main Entrance"}]
+    res = client.patch(f"/api/v1/events/{event['id']}", json={"gates": renamed}, headers=headers)
+    assert res.status_code == 200, res.text
+    assert all(_gate_of(headers, t) == "Main Entrance" for t in on_b)
+    assert _own(_sync(token_b, event["id"])) == set(on_b)  # the phone followed its gate
+
+    res = client.patch(f"/api/v1/events/{event['id']}", json={"gates": [gates[0]]}, headers=headers)
+    assert res.status_code == 200, res.text
+    assert {_gate_of(headers, t) for t in ticket_ids} == {"Gate A"}
+
+
+def test_tying_a_tier_to_a_gate_later_moves_its_tickets():
+    headers = _login("0799222005")
+    event = _create_gated_event(headers, ["Gate A", "VIP Entrance"])
+    vip = _buy_tier(headers, event, "VIP", "0799222005")
+    assert _gate_of(headers, vip) == "Gate A"
+    tiers = [dict(t) for t in event["tiers"]]
+    for t in tiers:
+        if t["name"] == "VIP":
+            t["gate"] = "VIP Entrance"
+    res = client.patch(f"/api/v1/events/{event['id']}", json={"tiers": tiers}, headers=headers)
+    assert res.status_code == 200, res.text
+    assert _gate_of(headers, vip) == "VIP Entrance"
+
+    tiers[1]["gate"] = "Nowhere"
+    res = client.patch(f"/api/v1/events/{event['id']}", json={"tiers": tiers}, headers=headers)
+    assert res.status_code == 400 and "isn't one of this event's gates" in res.json()["detail"]
+
+
+def test_an_order_of_several_tickets_shares_one_gate():
+    headers = _login("0799222008")
+    event = _create_gated_event(headers, ["Gate A", "Gate B"])
+    _buy_tier(headers, event, "General", "0799222008")  # Gate A is now the busier one
+    tier = next(t for t in event["tiers"] if t["name"] == "General")
+    res = client.post("/api/v1/payments/purchase", json={"event_id": event["id"], "tier_id": tier["id"], "phone_number": "0799222008", "quantity": 3}, headers=headers)
+    assert res.status_code == 201, res.text
+    client.post(f"/api/v1/payments/{res.json()['payment_id']}/dev-confirm", headers=headers)
+    mine = [t for t in client.get("/api/v1/tickets/my", headers=headers).json() if t["event_id"] == event["id"]]
+    assert sorted(t["gate_name"] for t in mine) == ["Gate A", "Gate B", "Gate B", "Gate B"]
+
+
+def test_receipt_email_names_the_gate():
+    from app.services.email_service import purchase_receipt
+    _, text, html = purchase_receipt(
+        name="Amina", order_ref="AB12CD34", event_title="Gate Night", event_date=None, venue="KICC",
+        tier_name="General", quantity=1, amount_kes=1000, mpesa_receipt="QK1", paid_at=None,
+        phone="0712345678", resale=False, tickets_url="https://example.com/tickets", gate="VIP Entrance",
+    )
+    assert "Enter by" in text and "VIP Entrance" in text and "VIP Entrance" in html
 
 
 def test_assignment_is_stable_across_repeated_syncs():
-    """The same device syncing twice (nothing about the gate set changed)
-    gets the exact same ticket set both times — a device re-syncing
-    mid-event must not have tickets silently reshuffle away from it."""
-    headers = _login("0799222003")
-    event = _create_org_and_event(headers, capacity=30)
-    for _ in range(12):
-        _buy_ticket(headers, event["id"], "0799222003")
-
-    _register_and_enroll(headers, event["id"], "device-stable-a", "Gate A")
+    headers = _login("0799222007")
+    event = _create_gated_event(headers, ["Gate A", "Gate B"])
+    for _ in range(6):
+        _buy_tier(headers, event, "General", "0799222007")
     token_b = _register_and_enroll(headers, event["id"], "device-stable-b", "Gate B")
-
-    first = client.get(f"/api/v1/gate/sync-event/{event['id']}", headers={"Authorization": f"Bearer {token_b}"}).json()
-    second = client.get(f"/api/v1/gate/sync-event/{event['id']}", headers={"Authorization": f"Bearer {token_b}"}).json()
-
-    assert {t["id"] for t in first["tickets"]} == {t["id"] for t in second["tickets"]}
+    assert _own(_sync(token_b, event["id"])) == _own(_sync(token_b, event["id"]))
 
 
 # ── B5: scan reconciliation ──────────────────────────────────────────────────

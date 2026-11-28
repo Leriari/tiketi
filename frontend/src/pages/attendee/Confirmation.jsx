@@ -7,6 +7,7 @@ import { formatEventDate } from "../../format";
 import { markFirstPurchase } from "../../components/InstallPrompt";
 import EventCover from "../../components/EventCover";
 import AddToCalendar from "../../components/AddToCalendar";
+import GateNotice from "../../components/GateNotice";
 
 export default function Confirmation() {
   const { ticketId } = useParams();
@@ -58,6 +59,7 @@ export default function Confirmation() {
           <p className="text-body-sm text-ink-secondary">{detail.venue} · {formatEventDate(detail.event_date)}</p>
           <p className="text-caption text-ink-tertiary mt-0.5">{detail.tier_name} ticket</p>
         </div>
+        <GateNotice gate={detail.gate_assignment} />
         <div className="flex items-center justify-between pt-2 border-t border-line-subtle">
           <span className="text-caption text-ink-tertiary">Ownership status</span>
           <ChainBadge status={detail.chain_status} txUrl={detail.chain?.mint_tx_url} />

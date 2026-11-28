@@ -16,7 +16,6 @@ from app.schemas.schemas import TicketOut, TicketSeedResponse, TicketTransferReq
 from app.services.totp_service import (
     generate_qr_image_bytes, generate_totp_secret, seconds_until_next_rotation, build_qr_payload,
 )
-from app.services.gate_partitioning import assign_gate
 from app.core.crypto import encrypt_secret
 from app.core.dependencies import get_current_user
 from app.core.config import get_settings
@@ -70,6 +69,7 @@ def get_my_tickets(
             "category": t.event.category if t.event else None,
             "image_url": t.event.image_url if t.event else None,
             "tier_name": t.tier.tier_name if t.tier else None,
+            "gate_name": t.gate_name,
         })
         for t in tickets
     ]
@@ -90,9 +90,6 @@ def get_ticket_detail(
     """
     ticket = _own_ticket(db, ticket_id, current_user)
     event = ticket.event
-    gates = sorted({
-        s.gate_name for s in db.query(GateScanner).filter(GateScanner.event_id == ticket.event_id).all() if s.gate_name
-    })
     admitted = db.query(Attendance).filter(
         Attendance.ticket_id == ticket.id, Attendance.status == AttendanceStatus.ADMITTED
     ).order_by(Attendance.scan_time).first()
@@ -113,9 +110,10 @@ def get_ticket_detail(
         "tier_name": ticket.tier.tier_name if ticket.tier else None,
         "seat_number": ticket.seat_number,
         "is_complimentary": bool(ticket.is_complimentary),
-        # The gate this ticket is partitioned to, once the organiser has
-        # enrolled scanner devices at more than one gate.
-        "gate_assignment": assign_gate(ticket.id, gates) if len(gates) > 1 else None,
+        # The gate to enter by, fixed when the ticket was bought
+        # (app/services/gates.py), and how many gates the event has.
+        "gate_assignment": ticket.gate_name,
+        "gate_count": len(event.gates or []) if event else 0,
         "payment": {
             "id": payment.id,
             "amount_kes": payment.amount_kes,

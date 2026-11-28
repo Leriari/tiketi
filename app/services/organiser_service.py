@@ -14,14 +14,15 @@ from urllib.parse import quote
 
 from fastapi import HTTPException
 from sqlalchemy import or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.core.config import get_settings
 from app.models.models import (
-    Event, EventStatus, EventTier, TierStatus, Ticket, Organizer, OrganizerVerificationStatus, User,
+    Event, EventStatus, EventTier, GateScanner, TierStatus, Ticket, Organizer, OrganizerVerificationStatus, User,
 )
 from app.schemas.schemas import EventDetailsIn, TierIn, EVENT_STATUS_FROM_UI, EVENT_STATUS_TO_UI
 from app.services import event_images
+from app.services import gates as gate_service
 from app.services.platform_settings import flag_on
 
 settings = get_settings()
@@ -151,6 +152,9 @@ def apply_event_details(db: Session, event: Event, body: EventDetailsIn, *, crea
         _bad("The end time must be after the start time.")
 
     # ── Gates ────────────────────────────────────────────────────────────
+    # A gate keeps its id when renamed: its tickets, tier rule and scanner
+    # phones follow it to the new name.
+    old_gate_names = {g.get("id"): g.get("name") for g in (event.gates or [])}
     if body.gates is not None:
         gates, seen = [], set()
         for g in body.gates:
@@ -164,6 +168,12 @@ def apply_event_details(db: Session, event: Event, body: EventDetailsIn, *, crea
         event.gates = gates
     if not event.gates:
         event.gates = [{"id": str(uuid.uuid4()), "name": "Gate A"}]
+    renamed = {
+        old_gate_names[g["id"]]: g["name"]
+        for g in event.gates
+        if g.get("id") in old_gate_names and old_gate_names[g["id"]] != g["name"]
+    }
+    gate_names = [g["name"] for g in event.gates]
 
     # ── Resale terms (apply to every tier) ───────────────────────────────
     multiplier = body.max_resale_multiplier if body.max_resale_multiplier is not None else (
@@ -211,6 +221,10 @@ def apply_event_details(db: Session, event: Event, body: EventDetailsIn, *, crea
             tier.sales_start = _naive_utc(tin.salesStart)
             tier.sales_end = _naive_utc(tin.salesEnd)
             tier.sort_order = order
+            gate = (tin.gate or "").strip() or None
+            if gate is not None and gate not in gate_names:
+                _bad(f"\"{name}\" is set to enter by \"{gate}\", which isn't one of this event's gates.")
+            tier.gate_name = gate
             tier.resale_floor_price_kes = round(tier.price_kes * floor_multiplier, 2)
             tier.resale_ceiling_price_kes = round(tier.price_kes * multiplier, 2)
             tier.organizer_royalty_percent = royalty
@@ -230,6 +244,18 @@ def apply_event_details(db: Session, event: Event, body: EventDetailsIn, *, crea
         tier.resale_floor_price_kes = round(tier.price_kes * floor_multiplier, 2)
         tier.resale_ceiling_price_kes = round(tier.price_kes * multiplier, 2)
         tier.organizer_royalty_percent = royalty
+        if tier.gate_name in renamed:
+            tier.gate_name = renamed[tier.gate_name]
+        if tier.gate_name and tier.gate_name not in gate_names:
+            tier.gate_name = None  # its gate was removed: any gate
+
+    # Tickets follow renamed gates; tickets at a removed gate, or whose tier
+    # is now tied to another gate, are moved (app/services/gates.py).
+    if event.id:
+        for old, new in renamed.items():
+            for scanner in db.query(GateScanner).filter(GateScanner.event_id == event.id, GateScanner.gate_name == old):
+                scanner.gate_name = new
+        gate_service.reconcile_event(db, event, renamed)
 
     tier_capacity = sum(t.capacity for t in event.tiers)
     if body.total_capacity is not None:
@@ -271,6 +297,7 @@ def tier_out(tier: EventTier, multiplier: float) -> dict:
         "visibility": tier.visibility or "public",
         "salesStart": tier.sales_start.isoformat() if tier.sales_start else "",
         "salesEnd": tier.sales_end.isoformat() if tier.sales_end else "",
+        "gate": tier.gate_name or "",
         "resale_floor_kes": tier.resale_floor_price_kes,
         "resale_ceiling_kes": round(tier.price_kes * multiplier),
     }
@@ -324,6 +351,8 @@ def event_out(event: Event, organisation: Organizer | None = None) -> dict:
         "status": status,
         "contract_address": settings.NFT_CONTRACT_ADDRESS or None,
         "gates": event.gates or [],
+        # Tickets per gate, so the organiser can see the balance.
+        "gate_counts": gate_service.ticket_counts(object_session(event), event) if object_session(event) else {},
         "tiers": [tier_out(t, multiplier) for t in event.tiers],
         "created_at": event.created_at.isoformat() if event.created_at else None,
     }

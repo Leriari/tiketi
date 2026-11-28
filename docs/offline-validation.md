@@ -65,10 +65,10 @@ Behaviour:
 3. Returns every `ACTIVE` ticket for the event, in the shape below.
 
 **No per-ticket gate assignment existed in the real schema as of Work Order 03** —
-now built, see "Gate partitioning (Work Order 05 B1)" below. The request/response
+now built, see "Gates: one per ticket, stored at purchase" below. The request/response
 shapes immediately following this paragraph are the original, now-superseded ones.
 
-**Response (historical — see B1 below for the current shape):**
+**Response (historical — see "Gates" below for the current shape):**
 
 ```jsonc
 {
@@ -125,30 +125,31 @@ A structured verdict, not a boolean — these become the evaluation categories:
 | `UNKNOWN_TICKET` | `ticket_id` not present in this device's synced cache |
 | `BAD_OTP` | Parses fine, but no accepted window produces this code |
 | `ALREADY_ADMITTED` | Found in this device's local admissions store |
-| `WRONG_GATE` | `gate_assignment` set and doesn't match this device's gate — defined but effectively unreachable under real partitioning (see check 4 above); a mismatched ticket now shows as `UNKNOWN_TICKET` instead |
+| `WRONG_GATE` | The ticket belongs to another gate: it was synced without a secret, only so the scanner can name the right gate |
 
-## Gate partitioning (Work Order 05 B1)
+## Gates: one per ticket, stored at purchase
 
-`app/services/gate_partitioning.py`: `assign_gate(ticket_id, sorted_gate_names)` — a
-stable SHA-256 hash of `ticket_id`, modulo the event's current, alphabetically sorted
-list of registered gate names. Computed fresh on every sync, not stored. Purchase-time
-assignment was the alternative and was rejected: gates (`GateScanner` rows) are
-typically registered close to the event, often after most tickets have already sold
-(Work Order 04 B4's enrolment flow), so there would usually be no gates to assign to
-yet at purchase time.
+`app/services/gates.py`. Each ticket gets its gate when it's created and keeps it
+(`tickets.gate_name`), so the attendee is told well before the event (ticket screen,
+My Tickets, confirmation, receipt email). The rule:
 
-`GET /gate/sync-event/{event_id}` (now device-token authenticated — see the status
-note at the top of this document) computes every active ticket's assigned gate and
-returns **only the ones matching the requesting device's own gate**, with
-`gate_assignment` echoing that gate's real name instead of always `null`.
+1. If the organiser tied the ticket's tier to a gate (`event_tiers.gate_name`, e.g.
+   VIP -> "VIP Entrance"), that gate.
+2. Otherwise the least-used of the event's other gates (fewest tickets so far; the
+   organiser's gate order breaks a tie).
 
-**The one real limitation, stated plainly**: the assignment is only stable for as
-long as the event's registered-gate set doesn't change. Registering a new gate (or
-deactivating one) after some devices have already synced changes the modulo base,
-which reshuffles every ticket's assignment on the next sync. A device that synced
-before the change keeps serving its stale assignment until it re-syncs. This is a
-known property of a computed-not-stored scheme, not an oversight — organisers should
-register all of an event's gates before any device syncs, not add one mid-event.
+Gates come from the event's own Gate Configuration, not from which scanner phones are
+registered, so adding a phone moves nobody. When the organiser renames a gate, its
+tickets, tier rule and scanner phones follow it. When they remove a gate, or tie a tier
+to a gate after sales, the affected tickets are moved (`reconcile_event`).
+
+`GET /gate/sync-event/{event_id}` returns this device's gate's active tickets **with**
+their secrets, and every other gate's active tickets **without** a secret. Only this
+gate can admit its tickets, so two offline gates can't both let the same ticket in. A
+ticket for another gate is refused as `WRONG_GATE`, naming the right gate.
+
+**Limitation**: a phone that synced before a gate change keeps the old split until it
+syncs again. Sync every gate phone after changing gates, close to doors opening.
 
 ## Scan reconciliation (Work Order 05 B5)
 

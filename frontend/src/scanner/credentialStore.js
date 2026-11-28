@@ -104,9 +104,12 @@ export async function getCredential(ticketId) {
   return promisifyRequest(tx(db, CREDENTIALS_STORE, "readonly").get(ticketId));
 }
 
+/** Tickets this gate can admit: other gates' tickets are stored without a
+ * secret (only to name their gate), so they aren't counted. */
 export async function countCredentials() {
   const db = await openDb();
-  return promisifyRequest(tx(db, CREDENTIALS_STORE, "readonly").count());
+  const all = await promisifyRequest(tx(db, CREDENTIALS_STORE, "readonly").getAll());
+  return all.filter((c) => c.totp_secret).length;
 }
 
 // ── Admissions (double-scan check + Block B upload queue) ──────────────────

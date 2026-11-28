@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ShieldCheck } from "lucide-react";
+import { ShieldCheck, DoorOpen } from "lucide-react";
 import { api, ApiError } from "../../api";
 import { useAuth } from "../../context/AuthContext";
 import { saveTicket, saveTicketList, savedTicketList } from "../../lib/offlineTickets";
@@ -137,6 +137,11 @@ export default function MyTickets() {
                 <p className="text-body font-semibold text-ink-primary truncate">{t.event.title}</p>
                 <p className="text-caption text-ink-tertiary truncate">{t.event.venue}</p>
                 <p className="text-caption text-ink-tertiary tabular-nums">{formatEventDate(t.event.event_date)}</p>
+                {t.gate_name && (t.status === "active" || t.status === "resale") && (
+                  <p className="text-caption font-semibold text-ink-secondary inline-flex items-center gap-1">
+                    <DoorOpen size={12} aria-hidden="true" /> Enter by {t.gate_name}
+                  </p>
+                )}
                 <p className="text-caption text-ink-tertiary inline-flex items-center gap-1">
                   {t.tier_name || "General"} ·
                   {t.nft_token_id

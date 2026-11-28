@@ -13,6 +13,7 @@ import { formatEventDate } from "../../format";
 import EventCover from "../../components/EventCover";
 import AddToCalendar from "../../components/AddToCalendar";
 import OnChainRecord from "../../components/OnChainRecord";
+import GateNotice from "../../components/GateNotice";
 
 const ROTATION_S = 30;
 const BRIGHTNESS_DISMISSED_KEY = "chaintix_brightness_prompt_seen";
@@ -204,7 +205,6 @@ export default function TicketCredential() {
           <h1 className="text-h1 text-ink-primary">{detail.event_title}</h1>
           <p className="text-body-sm text-ink-secondary">{detail.venue}</p>
           <p className="text-caption text-ink-tertiary mt-0.5">{formatEventDate(detail.event_date)}</p>
-          {detail.gate_assignment && <p className="text-caption text-ink-secondary font-semibold mt-0.5">Enter via {detail.gate_assignment}</p>}
         </div>
         {active && secret && (
           offline
@@ -219,6 +219,8 @@ export default function TicketCredential() {
           {offlineSince ? `Ticket details as of ${when(offlineSince)}.` : ""}
         </div>
       )}
+
+      {(active || detail.status === "resale") && <GateNotice gate={detail.gate_assignment} />}
 
       {active && !secret && offline ? (
         <div className="py-6 rounded-md bg-surface-inset text-center px-4 flex flex-col gap-1">
@@ -249,6 +251,7 @@ export default function TicketCredential() {
         <DetailRow label="Ticket ID" value={`#${detail.ticket_id.slice(0, 8).toUpperCase()}`} />
         <DetailRow label="Tier" value={`${detail.tier_name || "General"}${detail.is_complimentary ? " (complimentary)" : ""}`} />
         <DetailRow label="Seat" value={detail.seat_number || "General admission"} />
+        {detail.gate_assignment && <DetailRow label="Gate" value={detail.gate_assignment} />}
       </div>
 
       {detail.payment && <PaymentCard ticketId={detail.ticket_id} payment={detail.payment} receiptEmail={offline ? null : detail.receipt_email} />}

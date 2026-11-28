@@ -31,6 +31,7 @@ from app.core.crypto import encrypt_secret
 from app.core.dependencies import get_current_user
 from app.core.config import get_settings
 from app.core.rate_limit import enforce_rate_limit
+from app.services import gates as gate_service
 from app.services import organiser_service
 from app.services.platform_settings import flag_on
 from app.worker import mint_ticket_nft, send_payment_receipt, settle_resale_transfer
@@ -298,12 +299,15 @@ async def purchase_ticket(
 
     # ── 2. Create `quantity` pending tickets, each with its own credential ──
     tickets = []
+    # One gate for the whole order, so people who buy together go in together.
+    order_gate = gate_service.pick_gate(db, event, tier)
     for _ in range(body.quantity):
         ticket = Ticket(
             event_id=event.id,
             tier_id=tier.id,
             owner_id=current_user.id,
             status=TicketStatus.PENDING_PAYMENT,
+            gate_name=order_gate,  # fixed now, so the buyer can be told (app/services/gates.py)
         )
         db.add(ticket)
         db.flush()  # get ticket.id without committing

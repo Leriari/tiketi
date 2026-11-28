@@ -82,7 +82,10 @@ export default function EventManagement() {
         key: crypto.randomUUID(), ...t, price: String(t.price), capacity: String(t.capacity),
         salesStart: utcToLocalInput(t.salesStart, false), salesEnd: utcToLocalInput(t.salesEnd, false),
       })));
-      setGates(ev.gates.map((g) => ({ key: crypto.randomUUID(), ...g })));
+      // Tiers point at gates by key in the form, so renaming a gate keeps the rule.
+      const loadedGates = ev.gates.map((g) => ({ key: crypto.randomUUID(), ...g, tickets: ev.gate_counts?.[g.name] ?? 0 }));
+      setGates(loadedGates);
+      setTiers((rows) => rows.map((t) => ({ ...t, gateKey: loadedGates.find((g) => g.name === t.gate)?.key || "" })));
       setLoaded(true);
     }).catch((err) => {
       toast.push(err instanceof ApiError ? err.message : "Couldn't load this event.", { tone: "danger" });
@@ -166,6 +169,7 @@ export default function EventManagement() {
       tiers: tiers.map((t) => ({
         ...t, price: Number(t.price), capacity: Number(t.capacity),
         salesStart: localInputToUtc(t.salesStart), salesEnd: localInputToUtc(t.salesEnd),
+        gate: gates.find((g) => g.key === t.gateKey)?.name.trim() || null,
       })),
       gates: gates.map((g) => ({ id: g.id, name: g.name })),
     };
@@ -359,6 +363,12 @@ export default function EventManagement() {
                     </Select>
                     <DatePicker label="Sales start" value={t.salesStart || ""} onChange={(e) => updateTier(t.key, "salesStart", e.target.value)} />
                     <DatePicker label="Sales end" value={t.salesEnd || ""} onChange={(e) => updateTier(t.key, "salesEnd", e.target.value)} />
+                    {gates.length > 1 && (
+                      <Select label="Entry gate" value={t.gateKey || ""} onChange={(e) => updateTier(t.key, "gateKey", e.target.value)} hint="Any gate: spread across gates to keep queues even.">
+                        <option value="">Any gate</option>
+                        {gates.filter((g) => g.name.trim()).map((g) => <option key={g.key} value={g.key}>{g.name}</option>)}
+                      </Select>
+                    )}
                   </div>
                 </Card>
               ))}
@@ -370,10 +380,14 @@ export default function EventManagement() {
 
           <section className="flex flex-col gap-3 border-t border-line-subtle pt-6">
             <span className="text-label uppercase tracking-[0.06em] font-medium text-ink-tertiary">Gate Configuration</span>
+            <p className="text-caption text-ink-tertiary">
+              Each ticket is given a gate when it's bought, and the attendee sees it on their ticket. Tickets go to the gate set on their category, or else to the gate with the fewest tickets. Removing a gate moves its tickets to the others; sync the gate phones again after changing gates.
+            </p>
             <div className="flex flex-col gap-2">
               {gates.map((g, i) => (
                 <div key={g.key} className="flex items-center gap-2">
                   <Input aria-label="Gate name" value={g.name} onChange={(e) => { setDirty(true); setGates((rows) => rows.map((r) => (r.key === g.key ? { ...r, name: e.target.value } : r))); }} className="flex-1" />
+                  {isEdit && <span className="text-caption text-ink-tertiary tabular-nums w-24 text-right">{g.tickets ?? 0} ticket{g.tickets === 1 ? "" : "s"}</span>}
                   <button type="button" aria-label="Remove gate" onClick={() => { setDirty(true); setGates((rows) => rows.length > 1 ? rows.filter((r) => r.key !== g.key) : rows); }} className="text-danger"><X size={15} /></button>
                 </div>
               ))}

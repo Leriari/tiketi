@@ -193,6 +193,18 @@ describe("validate() — offline, no network, ever", () => {
     assertNoNetworkCalls();
   });
 
+  it("names the right gate for a ticket synced from another gate (no secret)", async () => {
+    await replaceCredentials([
+      ...buildTickets(),
+      { id: "ticket-elsewhere", tier_name: "VIP", seat_number: null, gate_assignment: "VIP Entrance", totp_secret: null, status: "active" },
+    ]);
+    const result = await validate("TIKETI:ticket-elsewhere:123456", { gateName: "Gate A" });
+    expect(result.granted).toBe(false);
+    expect(result.reasonCode).toBe(REASON.WRONG_GATE);
+    expect(result.reason).toContain("VIP Entrance");
+    assertNoNetworkCalls();
+  });
+
   it("rejects a ticket assigned to a different gate than the one scanning it", async () => {
     // ticket-0 and ticket-1 are built with gate_assignment: "Gate A"
     const secret = makeSecret(0);

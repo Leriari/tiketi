@@ -90,7 +90,7 @@ export function savedTicket(userId, ticketId) {
   let detail = entry?.detail;
   if (!detail) {
     const item = store.list?.find((t) => t.id === ticketId);
-    if (item) detail = { ...item, ticket_id: item.id };
+    if (item) detail = { ...item, ticket_id: item.id, gate_assignment: item.gate_name };
   }
   if (!detail) return null;
   return { detail, secret: entry?.secret || null, savedAt: entry?.savedAt || store.listSavedAt };
