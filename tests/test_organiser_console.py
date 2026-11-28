@@ -77,9 +77,9 @@ def _event_form(org_id: str, **overrides) -> dict:
         "resale_window_close_hours": 2,
         "tiers": [
             {"key": "a", "name": "General", "description": "", "price": 1000, "capacity": 50,
-             "salesStart": "", "salesEnd": "", "perOrderMax": 4, "visibility": "public"},
+             "salesStart": "", "salesEnd": "", "perOrderMax": 4, "visibility": "public", "gate": "Gate A"},
             {"key": "b", "name": "Guest List", "description": "", "price": 0, "capacity": 10,
-             "salesStart": "", "salesEnd": "", "perOrderMax": 1, "visibility": "hidden"},
+             "salesStart": "", "salesEnd": "", "perOrderMax": 1, "visibility": "hidden", "gate": "Gate B"},
         ],
         "gates": [{"name": "Gate A"}, {"name": "Gate B"}],
     }
@@ -208,7 +208,7 @@ def test_flat_single_tier_payload_still_works(owner, org):
 def test_edit_event_updates_tiers_and_gates(owner, org, event):
     tiers = [dict(t) for t in event["tiers"]]
     tiers[0]["name"] = "Early Bird"
-    tiers.append({"name": "VIP", "price": 5000, "capacity": 5, "visibility": "public"})
+    tiers.append({"name": "VIP", "price": 5000, "capacity": 5, "visibility": "public", "gate": "VIP Entrance"})
     res = client.patch(f"{API}/events/{event['id']}", json={
         "title": "Console Launch Night (Updated)", "tiers": tiers,
         "gates": event["gates"] + [{"name": "VIP Entrance"}],

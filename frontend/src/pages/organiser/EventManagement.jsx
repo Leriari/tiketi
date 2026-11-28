@@ -169,10 +169,15 @@ export default function EventManagement() {
       tiers: tiers.map((t) => ({
         ...t, price: Number(t.price), capacity: Number(t.capacity),
         salesStart: localInputToUtc(t.salesStart), salesEnd: localInputToUtc(t.salesEnd),
-        gate: gates.find((g) => g.key === t.gateKey)?.name.trim() || null,
+        gate: tierGate(t)?.name.trim() || null,
       })),
       gates: gates.map((g) => ({ id: g.id, name: g.name })),
     };
+  }
+
+  // A tier's entry gate: the one chosen, or the only gate there is.
+  function tierGate(t) {
+    return gates.find((g) => g.key === t.gateKey) || (gates.length === 1 ? gates[0] : null);
   }
 
   function validationErrors() {
@@ -181,6 +186,8 @@ export default function EventManagement() {
     if (!venue.trim()) missing.push("a venue");
     if (!startsAt) missing.push("a start date");
     if (!tiers.some((t) => t.name.trim() && Number(t.price) >= 0 && Number(t.capacity) > 0)) missing.push("at least one ticket tier with a name, price, and capacity");
+    const noGate = tiers.find((t) => t.name.trim() && !tierGate(t));
+    if (noGate) missing.push(`an entry gate for "${noGate.name.trim()}"`);
     return missing;
   }
 
@@ -363,12 +370,15 @@ export default function EventManagement() {
                     </Select>
                     <DatePicker label="Sales start" value={t.salesStart || ""} onChange={(e) => updateTier(t.key, "salesStart", e.target.value)} />
                     <DatePicker label="Sales end" value={t.salesEnd || ""} onChange={(e) => updateTier(t.key, "salesEnd", e.target.value)} />
-                    {gates.length > 1 && (
-                      <Select label="Entry gate" value={t.gateKey || ""} onChange={(e) => updateTier(t.key, "gateKey", e.target.value)} hint="Any gate: spread across gates to keep queues even.">
-                        <option value="">Any gate</option>
-                        {gates.filter((g) => g.name.trim()).map((g) => <option key={g.key} value={g.key}>{g.name}</option>)}
-                      </Select>
-                    )}
+                    <Select
+                      label="Entry gate"
+                      value={tierGate(t)?.key || ""}
+                      onChange={(e) => updateTier(t.key, "gateKey", e.target.value)}
+                      error={!tierGate(t) && t.name.trim() ? "Choose a gate" : undefined}
+                    >
+                      {!tierGate(t) && <option value="" disabled>Choose a gate</option>}
+                      {gates.filter((g) => g.name.trim()).map((g) => <option key={g.key} value={g.key}>{g.name}</option>)}
+                    </Select>
                   </div>
                 </Card>
               ))}
@@ -381,14 +391,20 @@ export default function EventManagement() {
           <section className="flex flex-col gap-3 border-t border-line-subtle pt-6">
             <span className="text-label uppercase tracking-[0.06em] font-medium text-ink-tertiary">Gate Configuration</span>
             <p className="text-caption text-ink-tertiary">
-              Each ticket is given a gate when it's bought, and the attendee sees it on their ticket. Tickets go to the gate set on their category, or else to the gate with the fewest tickets. Removing a gate moves its tickets to the others; sync the gate phones again after changing gates.
+              Every ticket category enters by one gate, chosen under Ticket Categories. Attendees see their gate on their ticket and receipt. Sync the gate phones again after changing gates.
             </p>
             <div className="flex flex-col gap-2">
               {gates.map((g, i) => (
                 <div key={g.key} className="flex items-center gap-2">
                   <Input aria-label="Gate name" value={g.name} onChange={(e) => { setDirty(true); setGates((rows) => rows.map((r) => (r.key === g.key ? { ...r, name: e.target.value } : r))); }} className="flex-1" />
-                  {isEdit && <span className="text-caption text-ink-tertiary tabular-nums w-24 text-right">{g.tickets ?? 0} ticket{g.tickets === 1 ? "" : "s"}</span>}
-                  <button type="button" aria-label="Remove gate" onClick={() => { setDirty(true); setGates((rows) => rows.length > 1 ? rows.filter((r) => r.key !== g.key) : rows); }} className="text-danger"><X size={15} /></button>
+                  <span className="text-caption text-ink-tertiary text-right w-48 truncate">
+                    {(() => {
+                      const used = tiers.filter((t) => t.name.trim() && tierGate(t)?.key === g.key).map((t) => t.name.trim());
+                      const count = isEdit ? ` · ${g.tickets ?? 0} ticket${g.tickets === 1 ? "" : "s"}` : "";
+                      return used.length ? `${used.join(", ")}${count}` : "No category uses this gate";
+                    })()}
+                  </span>
+                  <button type="button" aria-label="Remove gate" onClick={() => { setDirty(true); setGates((rows) => rows.length > 1 ? rows.filter((r) => r.key !== g.key) : rows); setTiers((rows) => rows.map((t) => (t.gateKey === g.key ? { ...t, gateKey: "" } : t))); }} className="text-danger"><X size={15} /></button>
                 </div>
               ))}
             </div>

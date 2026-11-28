@@ -3,13 +3,13 @@ Which gate each ticket enters by.
 
 A ticket's gate is chosen once, when the ticket is created, and stored on
 it (Ticket.gate_name), so the attendee can be told well before the event
-and the answer doesn't change when scanner phones are added. The rule:
+and the answer doesn't change when scanner phones are added.
 
-1. If the organiser tied the ticket's tier to a gate (EventTier.gate_name,
-   e.g. VIP -> "VIP Entrance"), that gate.
-2. Otherwise the event's least-used open gate: the one with the fewest
-   tickets so far, in the organiser's gate order on a tie. A gate that some
-   tier is tied to is kept for that tier, unless every gate is.
+Every tier has one entry gate (EventTier.gate_name, e.g. VIP -> "VIP
+Entrance"): the organiser must choose it before an event goes live, and an
+event with one gate uses it for every tier (organiser_service). A ticket
+takes its tier's gate. Only a tier left without one (an old event not yet
+re-saved) falls back to the least-used gate not chosen by another tier.
 
 A gate phone downloads only its own gate's ticket secrets (gate.py), so a
 ticket can't be admitted at two gates while they're offline.

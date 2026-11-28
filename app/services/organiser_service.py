@@ -246,8 +246,15 @@ def apply_event_details(db: Session, event: Event, body: EventDetailsIn, *, crea
         tier.organizer_royalty_percent = royalty
         if tier.gate_name in renamed:
             tier.gate_name = renamed[tier.gate_name]
-        if tier.gate_name and tier.gate_name not in gate_names:
-            tier.gate_name = None  # its gate was removed: any gate
+        if tier.gate_name not in gate_names:
+            # No gate chosen, or its gate was removed. With one gate there's
+            # nothing to choose; otherwise the organiser must pick (below).
+            tier.gate_name = gate_names[0] if len(gate_names) == 1 else None
+    # Every tier enters by one gate the organiser chose (drafts may be unfinished).
+    if not is_draft:
+        unset = [t.tier_name for t in event.tiers if not t.gate_name]
+        if unset:
+            _bad(f"Choose an entry gate for \"{unset[0]}\".")
 
     # Tickets follow renamed gates; tickets at a removed gate, or whose tier
     # is now tied to another gate, are moved (app/services/gates.py).

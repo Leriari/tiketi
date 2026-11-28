@@ -69,18 +69,25 @@ def _register_and_enroll(headers: dict, event_id: str, device_id: str, gate_name
 
 # ── B1: gates — each ticket gets one gate, stored at purchase ────────────────
 
-def _create_gated_event(headers: dict, gates: list[str], vip_gate: str | None = None) -> dict:
+def _create_gated_event(headers: dict, gates: list[str], general_gate: str | None = "", vip_gate: str | None = "",
+                        status: str = "live", expect: int = 201) -> dict:
+    """An event with General and VIP tiers. Each tier's gate defaults to the
+    first and last gate; pass None to leave one unset."""
     org = client.post("/api/v1/organisations/", json={"business_name": "Gate Test Org"}, headers=headers).json()
     res = client.post("/api/v1/events/", json={
         "organization_id": org["id"], "title": "Gate Test Event", "venue": "Test Venue",
-        "event_date": "2027-05-01T18:00:00", "status": "live",
+        "event_date": "2027-05-01T18:00:00", "status": status,
         "gates": [{"name": g} for g in gates],
         "tiers": [
-            {"name": "General", "price": 150, "capacity": 100, "visibility": "public"},
-            {"name": "VIP", "price": 900, "capacity": 20, "visibility": "public", "gate": vip_gate},
+            {"name": "General", "price": 150, "capacity": 100, "visibility": "public",
+             "gate": gates[0] if general_gate == "" else general_gate},
+            {"name": "VIP", "price": 900, "capacity": 20, "visibility": "public",
+             "gate": gates[-1] if vip_gate == "" else vip_gate},
         ],
     }, headers=headers)
-    assert res.status_code == 201, res.text
+    assert res.status_code == expect, res.text
+    if expect != 201:
+        return res.json()
     # The organiser console's view: it carries the gates and the full tier rows.
     console = client.get(f"/api/v1/organisations/{org['id']}/events/{res.json()['id']}", headers=headers)
     assert console.status_code == 200, console.text
@@ -110,32 +117,32 @@ def _gate_of(headers: dict, ticket_id: str) -> str | None:
     return client.get(f"/api/v1/tickets/{ticket_id}/detail", headers=headers).json()["gate_assignment"]
 
 
-def test_tickets_are_spread_evenly_and_each_gate_gets_only_its_own():
+def test_each_tier_uses_its_gate_and_each_gate_gets_only_its_own():
     headers = _login("0799222001")
-    event = _create_gated_event(headers, ["Gate A", "Gate B"])
-    ticket_ids = [_buy_tier(headers, event, "General", "0799222001") for _ in range(10)]
-
-    gates = [_gate_of(headers, t) for t in ticket_ids]
-    assert gates.count("Gate A") == 5 and gates.count("Gate B") == 5  # least-used gate each time
+    event = _create_gated_event(headers, ["Gate A", "VIP Entrance"])
+    general = [_buy_tier(headers, event, "General", "0799222001") for _ in range(3)]
+    vip = [_buy_tier(headers, event, "VIP", "0799222001") for _ in range(2)]
+    assert {_gate_of(headers, t) for t in general} == {"Gate A"}
+    assert {_gate_of(headers, t) for t in vip} == {"VIP Entrance"}
 
     sync_a = _sync(_register_and_enroll(headers, event["id"], "device-gate-a", "Gate A"), event["id"])
-    sync_b = _sync(_register_and_enroll(headers, event["id"], "device-gate-b", "Gate B"), event["id"])
-    assert _own(sync_a).isdisjoint(_own(sync_b))
-    assert _own(sync_a) | _own(sync_b) == set(ticket_ids)
-    assert sync_a["ticket_count"] == 5
-    # Gate A's phone also knows Gate B's tickets, without their secret, so it can redirect.
+    sync_v = _sync(_register_and_enroll(headers, event["id"], "device-gate-v", "VIP Entrance"), event["id"])
+    assert _own(sync_a) == set(general) and _own(sync_v) == set(vip)
+    assert sync_a["ticket_count"] == 3
+    # Gate A's phone also knows the VIP tickets, without their secret, so it can redirect.
     others = [t for t in sync_a["tickets"] if not t["totp_secret"]]
-    assert {t["id"] for t in others} == _own(sync_b)
-    assert all(t["gate_assignment"] == "Gate B" for t in others)
+    assert {t["id"] for t in others} == set(vip)
+    assert all(t["gate_assignment"] == "VIP Entrance" for t in others)
 
 
-def test_a_tier_tied_to_a_gate_goes_there_and_that_gate_is_kept_for_it():
+def test_going_live_needs_a_gate_for_every_tier():
     headers = _login("0799222002")
-    event = _create_gated_event(headers, ["Gate A", "Gate B", "VIP Entrance"], vip_gate="VIP Entrance")
-    vip = [_buy_tier(headers, event, "VIP", "0799222002") for _ in range(2)]
-    general = [_buy_tier(headers, event, "General", "0799222002") for _ in range(4)]
-    assert {_gate_of(headers, t) for t in vip} == {"VIP Entrance"}
-    assert sorted(_gate_of(headers, t) for t in general) == ["Gate A", "Gate A", "Gate B", "Gate B"]
+    err = _create_gated_event(headers, ["Gate A", "Gate B"], vip_gate=None, expect=400)
+    assert err["detail"] == 'Choose an entry gate for "VIP".'
+    # A draft can wait; an event with one gate needs no choosing.
+    _create_gated_event(headers, ["Gate A", "Gate B"], vip_gate=None, status="draft")
+    single = _create_gated_event(headers, ["Main Entrance"], general_gate=None, vip_gate=None)
+    assert {t["gate"] for t in single["tiers"]} == {"Main Entrance"}
 
 
 def test_the_gate_is_fixed_and_shown_before_any_scanner_exists():
@@ -152,34 +159,39 @@ def test_the_gate_is_fixed_and_shown_before_any_scanner_exists():
     assert _gate_of(headers, ticket_id) == "North"
 
 
-def test_renaming_a_gate_keeps_its_tickets_and_removing_one_moves_them():
+def test_renaming_a_gate_keeps_its_tickets_and_removing_one_needs_a_new_gate_for_its_tiers():
     headers = _login("0799222004")
-    event = _create_gated_event(headers, ["Gate A", "Gate B"])
-    ticket_ids = [_buy_tier(headers, event, "General", "0799222004") for _ in range(4)]
-    on_b = [t for t in ticket_ids if _gate_of(headers, t) == "Gate B"]
-    token_b = _register_and_enroll(headers, event["id"], "device-rename-b", "Gate B")
+    event = _create_gated_event(headers, ["Gate A", "Gate B", "Gate C"])
+    vip = [_buy_tier(headers, event, "VIP", "0799222004") for _ in range(2)]
+    token_c = _register_and_enroll(headers, event["id"], "device-rename-c", "Gate C")
 
     gates = event["gates"]
-    renamed = [gates[0], {"id": gates[1]["id"], "name": "Main Entrance"}]
+    renamed = [gates[0], gates[1], {"id": gates[2]["id"], "name": "Main Entrance"}]
     res = client.patch(f"/api/v1/events/{event['id']}", json={"gates": renamed}, headers=headers)
     assert res.status_code == 200, res.text
-    assert all(_gate_of(headers, t) == "Main Entrance" for t in on_b)
-    assert _own(_sync(token_b, event["id"])) == set(on_b)  # the phone followed its gate
+    assert all(_gate_of(headers, t) == "Main Entrance" for t in vip)
+    assert _own(_sync(token_c, event["id"])) == set(vip)  # the phone followed its gate
 
-    res = client.patch(f"/api/v1/events/{event['id']}", json={"gates": [gates[0]]}, headers=headers)
+    # Removing the VIP tier's gate: the organiser has to give VIP another.
+    res = client.patch(f"/api/v1/events/{event['id']}", json={"gates": gates[:2]}, headers=headers)
+    assert res.status_code == 400 and res.json()["detail"] == 'Choose an entry gate for "VIP".'
+    tiers = [dict(t, gate="Gate A") for t in event["tiers"]]
+    res = client.patch(f"/api/v1/events/{event['id']}", json={"gates": gates[:2], "tiers": tiers}, headers=headers)
     assert res.status_code == 200, res.text
-    assert {_gate_of(headers, t) for t in ticket_ids} == {"Gate A"}
+    assert {_gate_of(headers, t) for t in vip} == {"Gate A"}
+    # Down to one gate: every tier uses it, nothing to choose.
+    res = client.patch(f"/api/v1/events/{event['id']}", json={"gates": [gates[1]]}, headers=headers)
+    assert res.status_code == 200, res.text
+    assert {_gate_of(headers, t) for t in vip} == {"Gate B"}
 
 
-def test_tying_a_tier_to_a_gate_later_moves_its_tickets():
+def test_changing_a_tiers_gate_moves_its_tickets():
     headers = _login("0799222005")
-    event = _create_gated_event(headers, ["Gate A", "VIP Entrance"])
+    event = _create_gated_event(headers, ["Gate A", "VIP Entrance"], vip_gate="Gate A")
     vip = _buy_tier(headers, event, "VIP", "0799222005")
     assert _gate_of(headers, vip) == "Gate A"
     tiers = [dict(t) for t in event["tiers"]]
-    for t in tiers:
-        if t["name"] == "VIP":
-            t["gate"] = "VIP Entrance"
+    tiers[1]["gate"] = "VIP Entrance"
     res = client.patch(f"/api/v1/events/{event['id']}", json={"tiers": tiers}, headers=headers)
     assert res.status_code == 200, res.text
     assert _gate_of(headers, vip) == "VIP Entrance"
@@ -192,13 +204,12 @@ def test_tying_a_tier_to_a_gate_later_moves_its_tickets():
 def test_an_order_of_several_tickets_shares_one_gate():
     headers = _login("0799222008")
     event = _create_gated_event(headers, ["Gate A", "Gate B"])
-    _buy_tier(headers, event, "General", "0799222008")  # Gate A is now the busier one
     tier = next(t for t in event["tiers"] if t["name"] == "General")
     res = client.post("/api/v1/payments/purchase", json={"event_id": event["id"], "tier_id": tier["id"], "phone_number": "0799222008", "quantity": 3}, headers=headers)
     assert res.status_code == 201, res.text
     client.post(f"/api/v1/payments/{res.json()['payment_id']}/dev-confirm", headers=headers)
     mine = [t for t in client.get("/api/v1/tickets/my", headers=headers).json() if t["event_id"] == event["id"]]
-    assert sorted(t["gate_name"] for t in mine) == ["Gate A", "Gate B", "Gate B", "Gate B"]
+    assert [t["gate_name"] for t in mine] == ["Gate A"] * 3
 
 
 def test_receipt_email_names_the_gate():
