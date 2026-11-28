@@ -71,7 +71,7 @@ def _event_form(org_id: str, **overrides) -> dict:
         "description_html": "<p>Live</p>",
         "status": "live",
         "max_resale_multiplier": 1.5,
-        "resale_royalty_percent": 12,
+        "resale_royalty_percent": 4.5,
         "resale_enabled": True,
         "resale_window_open_days": 0,
         "resale_window_close_hours": 2,
@@ -130,7 +130,7 @@ def test_create_event_stores_the_full_form(event):
     assert event["tiers"][1]["visibility"] == "hidden"
     assert event["total_capacity"] == 60  # auto-summed from tiers
     assert event["resale_ceiling_multiplier"] == 1.5
-    assert event["resale_royalty_percent"] == 12
+    assert event["resale_royalty_percent"] == 4.5
     assert event["tiers"][0]["resale_ceiling_kes"] == 1500
 
 
@@ -157,6 +157,41 @@ def test_publishing_a_free_public_tier_is_rejected(owner, org):
     res = client.post(f"{API}/events/", json=form, headers=owner)
     assert res.status_code == 400
     assert "M-Pesa can't charge KES 0" in res.json()["detail"]
+
+
+def test_royalty_defaults_to_5_percent_and_cannot_go_above(owner, org):
+    form = _event_form(org["id"], title="Royalty Default")
+    del form["resale_royalty_percent"]
+    created = client.post(f"{API}/events/", json=form, headers=owner)
+    assert created.status_code == 201, created.text
+    assert created.json()["resale_royalty_percent"] == 5
+    console = client.get(f"{API}/organisations/{org['id']}/events/{created.json()['id']}", headers=owner).json()
+    assert console["resale_royalty_percent"] == 5 and console["max_royalty_percent"] == 5
+
+    too_high = client.post(f"{API}/events/", json=_event_form(org["id"], title="Greedy", resale_royalty_percent=5.5), headers=owner)
+    assert too_high.status_code == 400
+    assert "between 0% and 5%" in too_high.json()["detail"]
+
+    edit = client.patch(f"{API}/events/{created.json()['id']}", json={"resale_royalty_percent": 10}, headers=owner)
+    assert edit.status_code == 400
+    lower = client.patch(f"{API}/events/{created.json()['id']}", json={"resale_royalty_percent": 2.5}, headers=owner)
+    assert lower.status_code == 200 and lower.json()["resale_royalty_percent"] == 2.5
+
+
+def test_old_event_above_the_limit_is_brought_down_on_its_next_edit(owner, org):
+    from app.models.models import EventTier
+    from tests.test_api import TestingSessionLocal
+
+    created = client.post(f"{API}/events/", json=_event_form(org["id"], title="Before The Limit"), headers=owner).json()
+    db = TestingSessionLocal()
+    try:  # an event set up when 10% was allowed
+        db.query(EventTier).filter(EventTier.event_id == created["id"]).update({"organizer_royalty_percent": 10.0})
+        db.commit()
+    finally:
+        db.close()
+    res = client.patch(f"{API}/events/{created['id']}", json={"title": "Before The Limit (edited)"}, headers=owner)
+    assert res.status_code == 200, res.text
+    assert res.json()["resale_royalty_percent"] == 5
 
 
 def test_flat_single_tier_payload_still_works(owner, org):
@@ -455,7 +490,8 @@ def test_event_image_is_processed_and_served(owner, org):
     assert public["category"] == "Music"
     assert "base64" not in res.text  # payloads carry a URL, never the bytes
 
-    listed = next(e for e in client.get(f"{API}/events/").json() if e["id"] == public["id"])
+    # A big page: other tests' events share this database (the default page is 20).
+    listed = next(e for e in client.get(f"{API}/events/?limit=500").json() if e["id"] == public["id"])
     assert listed["image_url"] == public["image_url"]
 
     img = client.get(public["image_url"])

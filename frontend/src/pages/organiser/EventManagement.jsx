@@ -47,7 +47,9 @@ export default function EventManagement() {
   const [resaleEnabled, setResaleEnabled] = useState(true);
   const [resaleCapPct, setResaleCapPct] = useState(120);
   const [resaleFloorPct, setResaleFloorPct] = useState(100);
-  const [royaltyPct, setRoyaltyPct] = useState(10);
+  // The organiser's cut of each resale: 5% by default, and at most 5% (the server enforces it).
+  const [royaltyPct, setRoyaltyPct] = useState(5);
+  const [maxRoyaltyPct, setMaxRoyaltyPct] = useState(5);
   const [windowOpenDays, setWindowOpenDays] = useState(0);
   const [windowCloseHours, setWindowCloseHours] = useState(2);
   const [tiers, setTiers] = useState([emptyTier()]);
@@ -71,7 +73,9 @@ export default function EventManagement() {
       setResaleEnabled(ev.resale_enabled);
       setResaleCapPct(Math.round(ev.resale_ceiling_multiplier * 100));
       setResaleFloorPct(Math.round((ev.resale_floor_multiplier ?? 1) * 100));
-      setRoyaltyPct(ev.resale_royalty_percent);
+      const maxRoyalty = ev.max_royalty_percent ?? 5;
+      setMaxRoyaltyPct(maxRoyalty);
+      setRoyaltyPct(Math.min(ev.resale_royalty_percent, maxRoyalty));
       setWindowOpenDays(ev.resale_window_open_days);
       setWindowCloseHours(ev.resale_window_close_hours);
       setTiers(ev.tiers.map((t) => ({
@@ -322,8 +326,8 @@ export default function EventManagement() {
                 </div>
                 <div className="flex flex-col gap-1.5">
                   <label className="text-label uppercase tracking-[0.06em] font-medium text-ink-tertiary">Organiser royalty</label>
-                  <input type="range" aria-label="Organiser royalty" min={0} max={30} value={royaltyPct} onChange={(e) => markDirty(setRoyaltyPct)(Number(e.target.value))} className="accent-brand-primary" />
-                  <span className="text-caption text-ink-secondary tabular-nums">{royaltyPct}%</span>
+                  <input type="range" aria-label="Organiser royalty" min={0} max={maxRoyaltyPct} step={0.5} value={royaltyPct} onChange={(e) => markDirty(setRoyaltyPct)(Number(e.target.value))} className="accent-brand-primary" />
+                  <span className="text-caption text-ink-secondary tabular-nums">{royaltyPct}% of each resale · {maxRoyaltyPct}% at most</span>
                 </div>
                 <Input label="Resale opens (days after sale)" type="number" min={0} value={windowOpenDays} onChange={(e) => markDirty(setWindowOpenDays)(Number(e.target.value))} />
                 <Input label="Resale closes (hours before event)" type="number" min={0} value={windowCloseHours} onChange={(e) => markDirty(setWindowCloseHours)(Number(e.target.value))} />

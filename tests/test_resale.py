@@ -58,7 +58,7 @@ def _create_event(headers: dict, **overrides) -> dict:
         "ticket_price_kes": 1000,
         "total_capacity": 50,
         "max_resale_multiplier": 1.2,
-        "resale_royalty_percent": 10.0,
+        "resale_royalty_percent": 5.0,
     }
     payload.update(overrides)
     res = client.post("/api/v1/events/", json=payload, headers=headers)
@@ -299,7 +299,7 @@ def test_floor_outside_range_is_rejected(seller_headers):
 
 def test_payout_arithmetic_exact_no_rounding_loss(seller_headers, buyer_headers):
     # Deliberately a price/royalty combination that doesn't divide cleanly.
-    event = _create_event(seller_headers, ticket_price_kes=999, resale_royalty_percent=7.5)
+    event = _create_event(seller_headers, ticket_price_kes=999, resale_royalty_percent=4.5)
     ticket_id = _purchase_and_mint(seller_headers, event["id"], "0711000001")
     listing = _list_ticket(seller_headers, ticket_id, 999)
 
@@ -314,7 +314,7 @@ def test_payout_arithmetic_exact_no_rounding_loss(seller_headers, buyer_headers)
     )
 
 
-@pytest.mark.parametrize("price,royalty_percent", [(1499, 12.5), (777, 3.33), (10001, 15.0)])
+@pytest.mark.parametrize("price,royalty_percent", [(1499, 2.5), (777, 3.33), (10001, 5.0)])
 def test_payout_arithmetic_various_odd_prices(seller_headers, buyer_headers, price, royalty_percent):
     event = _create_event(
         seller_headers, ticket_price_kes=price, resale_royalty_percent=royalty_percent, max_resale_multiplier=1.0

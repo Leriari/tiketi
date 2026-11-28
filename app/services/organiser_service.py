@@ -29,7 +29,10 @@ settings = get_settings()
 DEFAULT_RESALE_MULTIPLIER = 1.2
 # Resale below face value isn't allowed unless the organiser lowers this.
 DEFAULT_RESALE_FLOOR_MULTIPLIER = 1.0
-DEFAULT_ROYALTY_PERCENT = 10.0
+# The organiser's cut of every resale: 5% unless they choose less, and
+# never more (a platform rule, enforced here for every create and edit).
+MAX_ROYALTY_PERCENT = 5.0
+DEFAULT_ROYALTY_PERCENT = MAX_ROYALTY_PERCENT
 
 
 def _bad(detail: str):
@@ -169,15 +172,17 @@ def apply_event_details(db: Session, event: Event, body: EventDetailsIn, *, crea
     floor_multiplier = body.min_resale_multiplier if body.min_resale_multiplier is not None else (
         DEFAULT_RESALE_FLOOR_MULTIPLIER if creating else event.resale_floor_multiplier
     )
+    # An edit that doesn't touch the royalty keeps it, brought down to the
+    # limit if the event was set up before there was one.
     royalty = body.resale_royalty_percent if body.resale_royalty_percent is not None else (
-        DEFAULT_ROYALTY_PERCENT if creating else event.resale_royalty_percent
+        DEFAULT_ROYALTY_PERCENT if creating else min(event.resale_royalty_percent, MAX_ROYALTY_PERCENT)
     )
     if not 1.0 <= multiplier <= 2.0:
         _bad("The maximum resale price must be between 100% and 200% of face value.")
     if not 0 <= floor_multiplier <= 1.0:
         _bad("The minimum resale price must be between 0% and 100% of face value.")
-    if not 0 <= royalty <= 30:
-        _bad("The organiser royalty must be between 0% and 30%.")
+    if not 0 <= royalty <= MAX_ROYALTY_PERCENT:
+        _bad(f"The organiser royalty must be between 0% and {MAX_ROYALTY_PERCENT:g}%.")
 
     # ── Tiers ────────────────────────────────────────────────────────────
     if body.tiers is not None:
@@ -305,7 +310,8 @@ def event_out(event: Event, organisation: Organizer | None = None) -> dict:
         "tickets_remaining": remaining,
         "availability": availability,
         "max_resale_price_kes": event.max_resale_price_kes,
-        "resale_royalty_percent": event.resale_royalty_percent or DEFAULT_ROYALTY_PERCENT,
+        "resale_royalty_percent": min(event.resale_royalty_percent or DEFAULT_ROYALTY_PERCENT, MAX_ROYALTY_PERCENT),
+        "max_royalty_percent": MAX_ROYALTY_PERCENT,
         "resale_ceiling_multiplier": multiplier,
         "resale_floor_multiplier": event.resale_floor_multiplier,
         "resale_enabled": bool(event.resale_enabled),

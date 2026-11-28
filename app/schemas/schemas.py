@@ -187,7 +187,8 @@ class EventCreate(EventDetailsIn):
     # `tiers` is given.
     ticket_price_kes: Optional[float] = None
     max_resale_multiplier: float = 1.2
-    resale_royalty_percent: float = 10.0
+    # None = the platform default (5%, also the maximum).
+    resale_royalty_percent: Optional[float] = None
 
     @field_validator("organizer_phone")
     @classmethod

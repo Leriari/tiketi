@@ -413,7 +413,7 @@ class EventTier(Base):
     # Anti-scalping bounds (floor defaults to face value; ceiling is the old max_resale_multiplier)
     resale_floor_price_kes: Mapped[float] = mapped_column(Float, nullable=False)
     resale_ceiling_price_kes: Mapped[float] = mapped_column(Float, nullable=False)
-    organizer_royalty_percent: Mapped[float] = mapped_column(Float, default=10.0)
+    organizer_royalty_percent: Mapped[float] = mapped_column(Float, default=5.0)  # at most 5% (organiser_service.MAX_ROYALTY_PERCENT)
 
     status: Mapped[TierStatus] = mapped_column(SAEnum(TierStatus), default=TierStatus.ACTIVE)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
