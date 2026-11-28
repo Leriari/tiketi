@@ -29,7 +29,7 @@ const NAV_GROUPS = [
       { to: "/organiser/scanners", label: "QR Scanner Hub", icon: QrCode },
       { to: "/organiser/scan", label: "Live QR Scanner", icon: ScanLine },
       // The offline gate-phone app (enrol, sync, scan): outside the console.
-      { to: "/scanner", label: "Gate Scanner App", icon: Smartphone },
+      { to: "/scanner", label: "Gate Scanner App", icon: Smartphone, newTab: true },
       { to: "/organiser/guests", label: "Guest Lists", icon: ListChecks },
     ],
   },

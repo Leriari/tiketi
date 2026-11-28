@@ -59,7 +59,7 @@ export default function AttendeeShell() {
       ? { label: "Organiser Console", onClick: () => navigate("/organiser") }
       : { label: "Become an organiser", onClick: () => navigate("/organiser/register") },
     ...(access.admin ? [{ label: "Platform admin", onClick: () => navigate("/admin") }] : []),
-    ...(access.organiser ? [{ label: "Gate scanner", onClick: () => navigate("/scanner") }] : []),
+    ...(access.organiser ? [{ label: "Gate scanner (new tab)", onClick: () => window.open("/scanner", "_blank", "noopener") }] : []),
     { label: "Log out", danger: true, onClick: () => { logout(); navigate("/"); } },
   ];
 

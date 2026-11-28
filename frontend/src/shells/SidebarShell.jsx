@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
-import { Menu, ArrowLeft } from "lucide-react";
+import { Menu, ArrowLeft, ExternalLink } from "lucide-react";
 import { ThemeToggle, Avatar, DropdownMenu, Drawer } from "../components/ui";
 import { useAuth, useSurfaceAccess } from "../context/AuthContext";
 import { cn } from "../lib/cn";
@@ -31,7 +31,26 @@ function NavLinks({ navGroups, collapsed, onNavigate }) {
             </div>
           )}
           <div className="flex flex-col gap-0.5">
-            {group.items.map((item) => (
+            {group.items.map((item) => item.newTab ? (
+              // A separate full-screen app (the gate scanner): opened beside
+              // the console, so the console and its sidebar stay put.
+              <a
+                key={item.to}
+                href={item.to}
+                target="_blank"
+                rel="noopener"
+                onClick={onNavigate}
+                title={collapsed ? `${item.label} (opens in a new tab)` : undefined}
+                className={cn(
+                  "relative flex items-center gap-3 h-10 rounded-md text-body-sm font-medium transition-colors duration-150 text-ink-secondary hover:bg-surface-elevated hover:text-ink-primary",
+                  collapsed ? "justify-center px-0" : "px-2.5"
+                )}
+              >
+                <item.icon size={18} className="flex-none" />
+                {!collapsed && <span className="truncate flex-1">{item.label}</span>}
+                {!collapsed && <ExternalLink size={13} className="flex-none text-ink-tertiary" aria-label="opens in a new tab" />}
+              </a>
+            ) : (
               <NavLink
                 key={item.to}
                 to={item.to}

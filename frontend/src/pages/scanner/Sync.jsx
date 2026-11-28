@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { ScanLine, HardDrive, Clock, CalendarRange, KeyRound, Smartphone } from "lucide-react";
+import { ScanLine, HardDrive, Clock, CalendarRange, KeyRound, Smartphone, ArrowLeft } from "lucide-react";
+import { useSurfaceAccess } from "../../context/AuthContext";
 import { api, ApiError } from "../../api";
 import { useToast } from "../../components/ui/Toast";
 import { Input, Button, ProgressBar, ErrorState, Skeleton } from "../../components/ui";
@@ -24,6 +25,8 @@ export default function Sync() {
   const navigate = useNavigate();
   const toast = useToast();
   const [params, setParams] = useSearchParams();
+  // An organiser testing the scanner on their own device gets a way back.
+  const access = useSurfaceAccess();
   const [device, setDevice] = useState(() => getDeviceInfo());
   // Opened from Scanner Hub's enrolment QR (/scanner?code=…): the code is filled in.
   const [enrollCode, setEnrollCode] = useState(() => (params.get("code") || "").toUpperCase());
@@ -138,6 +141,11 @@ export default function Sync() {
 
   return (
     <div className="min-h-screen flex flex-col px-5 py-8 max-w-md mx-auto">
+      {access.organiser && (
+        <Link to="/organiser/scanners" className="inline-flex items-center gap-1.5 text-body-sm text-ink-tertiary hover:text-ink-primary mb-5 self-start">
+          <ArrowLeft size={14} aria-hidden="true" /> Organiser Console
+        </Link>
+      )}
       <div className="flex items-center gap-2.5 mb-1">
         <Link to="/" title="Home" className="rounded-md"><BrandMark size={36} /></Link>
         <h1 className="text-h2 text-ink-primary font-bold">Scanner</h1>
